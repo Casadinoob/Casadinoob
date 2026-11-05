@@ -35,15 +35,6 @@ class ColorsCard extends Card {
     slices = [this.actual, this.forecast, this.under, this.ok, this.over];
 }
 
-class TargetsCard extends Card {
-    name = "targets";
-    displayName = "Targets";
-    serviceLevelTarget = new formattingSettings.NumUpDown({ name: "serviceLevelTarget", displayName: "Service level target (%)", value: 80 });
-    accuracyTarget = new formattingSettings.NumUpDown({ name: "accuracyTarget", displayName: "Forecast accuracy target (%)", value: 90 });
-    staffingTolerance = new formattingSettings.NumUpDown({ name: "staffingTolerance", displayName: "Staffing tolerance (± %)", value: 5 });
-    slices = [this.serviceLevelTarget, this.accuracyTarget, this.staffingTolerance];
-}
-
 class SectionsCard extends Card {
     name = "sections";
     displayName = "Sections";
@@ -57,7 +48,6 @@ class SectionsCard extends Card {
 export class VisualSettings extends Model {
     general = new GeneralCard();
     colors = new ColorsCard();
-    targets = new TargetsCard();
     sections = new SectionsCard();
-    cards = [this.general, this.colors, this.targets, this.sections];
+    cards = [this.general, this.colors, this.sections];
 }

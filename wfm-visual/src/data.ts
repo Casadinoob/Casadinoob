@@ -6,7 +6,7 @@ export type ViewMode = "intraday" | "daily" | "weekly";
 export interface Row {
     idx: number;
     t: Date;
-    queue: string;
+    skill: string; team: string; level: string;
     agent: string;
     avatar: string;
     fv: number | null; av: number | null;
@@ -40,7 +40,7 @@ export interface Kpis {
 
 export interface AgentStat { name: string; avatar: string; adherence: number | null; handled: number; queues: number; }
 
-const ROLE_ORDER = ["interval", "queue", "agent", "avatarUrl", "forecastVolume", "actualVolume", "forecastAht",
+const ROLE_ORDER = ["interval", "skill", "team", "level", "agent", "avatarUrl", "forecastVolume", "actualVolume", "forecastAht",
     "actualAht", "requiredFte", "scheduledFte", "serviceLevel", "adherence"] as const;
 
 const frac = (v: number | null): number | null => (v !== null && v > 1.5 ? v / 100 : v);   // accept 0-1 or 0-100
@@ -66,7 +66,7 @@ export function parseTable(table: powerbi.DataViewTable | undefined): { rows: Ro
         if (!raw || isNaN(t.getTime())) { return; }
         rows.push({
             idx, t,
-            queue: String(get(r, "queue") ?? ""),
+            skill: String(get(r, "skill") ?? ""), team: String(get(r, "team") ?? ""), level: String(get(r, "level") ?? ""),
             agent: String(get(r, "agent") ?? ""),
             avatar: String(get(r, "avatarUrl") ?? ""),
             fv: num(get(r, "forecastVolume")), av: num(get(r, "actualVolume")),
@@ -119,7 +119,7 @@ export function collapse(rows: Row[]): Iv[] {
             m.set(k, iv);
         }
         iv.rows.push(r.idx);
-        if (r.fv !== null) { iv.fv += r.fv; if (r.av !== null) { iv.fvA += r.fv; } }
+        if (r.fv !== null) { iv.fv += r.fv; }
         if (r.av !== null) { iv.avSum += r.av; iv.hasAv = true; }
         if (r.fa !== null) { const w = r.fv ?? 1; iv.faW += r.fa * w; iv.faN += w; }
         if (r.aa !== null) { const w = r.av ?? 1; iv.aaW += r.aa * w; iv.aaN += w; }
@@ -128,7 +128,9 @@ export function collapse(rows: Row[]): Iv[] {
         if (r.sl !== null) { const w = r.av ?? 1; iv.slW += r.sl * w; iv.slN += w; }
         if (r.ad !== null) { iv.ad.push(r.ad); }
     }
-    return Array.from(m.values()).sort((a, b) => a.t.getTime() - b.t.getTime());
+    const out = Array.from(m.values()).sort((a, b) => a.t.getTime() - b.t.getTime());
+    out.forEach(iv => { iv.fvA = iv.hasAv ? iv.fv : 0; });   // forecast only counts where actuals exist (decided per interval, rows may differ)
+    return out;
 }
 
 export function intervalMinutes(ivs: Iv[]): number {
@@ -206,19 +208,108 @@ export function kpis(buckets: Bucket[]): Kpis {
     };
 }
 
-export function roster(rows: Row[], inRange: Set<number>): AgentStat[] {
-    const m = new Map<string, { avatar: string; adS: number; adN: number; handled: number; q: Set<string> }>();
+export type Dim = "skill" | "team" | "level" | "agent";
+export interface DimStat {
+    name: string; avatar: string; team: string; level: string; skill: string;
+    agents: number; fvA: number; av: number; handled: number;
+    fa: number | null; aa: number | null; sl: number | null; ad: number | null;
+    rf: number | null; sf: number | null; gapPct: number | null; accuracy: number | null; volVarPct: number | null;
+}
+
+/** Aggregate rows by a dimension (skill/team/level/agent). FTE is averaged across intervals, volumes summed. */
+export function byDim(rows: Row[], dim: Dim): DimStat[] {
+    interface Acc { avatar: string; team: string; level: string; skill: string; agents: Set<string>; iv: Map<number, { fv: number; av: number; hasAv: boolean; rf: number; sf: number; hasR: boolean; hasS: boolean }>;
+        faW: number; faN: number; aaW: number; aaN: number; slW: number; slN: number; adS: number; adN: number; handled: number }
+    const m = new Map<string, Acc>();
     for (const r of rows) {
-        if (!r.agent || !inRange.has(r.idx)) { continue; }
-        let a = m.get(r.agent);
-        if (!a) { a = { avatar: "", adS: 0, adN: 0, handled: 0, q: new Set() }; m.set(r.agent, a); }
+        const k = r[dim];
+        if (!k) { continue; }
+        let a = m.get(k);
+        if (!a) { a = { avatar: "", team: "", level: "", skill: "", agents: new Set(), iv: new Map(), faW: 0, faN: 0, aaW: 0, aaN: 0, slW: 0, slN: 0, adS: 0, adN: 0, handled: 0 }; m.set(k, a); }
         if (r.avatar && !a.avatar) { a.avatar = r.avatar; }
+        if (r.team && !a.team) { a.team = r.team; }
+        if (r.level && !a.level) { a.level = r.level; }
+        if (r.skill && !a.skill) { a.skill = r.skill; }
+        if (r.agent) { a.agents.add(r.agent); }
+        const t = r.t.getTime();
+        let iv = a.iv.get(t);
+        if (!iv) { iv = { fv: 0, av: 0, hasAv: false, rf: 0, sf: 0, hasR: false, hasS: false }; a.iv.set(t, iv); }
+        if (r.fv !== null) { iv.fv += r.fv; }
+        if (r.av !== null) { iv.av += r.av; iv.hasAv = true; a.handled += r.av; }
+        if (r.rf !== null) { iv.rf += r.rf; iv.hasR = true; }
+        if (r.sf !== null) { iv.sf += r.sf; iv.hasS = true; }
+        if (r.fa !== null) { const w = r.fv ?? 1; a.faW += r.fa * w; a.faN += w; }
+        if (r.aa !== null) { const w = r.av ?? 1; a.aaW += r.aa * w; a.aaN += w; }
+        if (r.sl !== null) { const w = r.av ?? 1; a.slW += r.sl * w; a.slN += w; }
         if (r.ad !== null) { a.adS += r.ad; a.adN++; }
-        if (r.av !== null) { a.handled += r.av; }
-        if (r.queue) { a.q.add(r.queue); }
     }
-    return Array.from(m, ([name, a]) => ({ name, avatar: a.avatar, adherence: a.adN ? a.adS / a.adN : null, handled: a.handled, queues: a.q.size }))
-        .sort((x, y) => y.handled - x.handled || x.name.localeCompare(y.name));
+    return Array.from(m, ([name, a]) => {
+        let fvA = 0, av = 0, abs = 0, rf = 0, nr = 0, sf = 0, ns = 0;
+        a.iv.forEach(i => {
+            if (i.hasAv) { fvA += i.fv; av += i.av; abs += Math.abs(i.av - i.fv); }
+            if (i.hasR) { rf += i.rf; nr++; }
+            if (i.hasS) { sf += i.sf; ns++; }
+        });
+        const rfa = nr ? rf / nr : null, sfa = ns ? sf / ns : null;
+        return {
+            name, avatar: a.avatar, team: a.team, level: a.level, skill: a.skill, agents: a.agents.size, fvA, av, handled: a.handled,
+            fa: a.faN ? a.faW / a.faN : null, aa: a.aaN ? a.aaW / a.aaN : null, sl: a.slN ? a.slW / a.slN : null, ad: a.adN ? a.adS / a.adN : null,
+            rf: rfa, sf: sfa, gapPct: rfa && sfa !== null ? (sfa - rfa) / rfa : null,
+            accuracy: fvA > 0 ? Math.max(0, 1 - abs / fvA) : null, volVarPct: fvA > 0 ? (av - fvA) / fvA : null
+        };
+    }).sort((x, y) => y.handled - x.handled || x.name.localeCompare(y.name));
+}
+
+/** Skill x hour staffing coverage: average required & scheduled FTE per (skill,hour). */
+export interface CoverCell { skill: string; hour: number; rf: number | null; sf: number | null; v: number | null; }
+export function coverage(rows: Row[], skills: string[]): CoverCell[] {
+    const per = new Map<string, { rf: number; sf: number; hasR: boolean; hasS: boolean }>();
+    for (const r of rows) {
+        if (!r.skill || (r.rf === null && r.sf === null)) { continue; }
+        const k = `${r.skill}|${r.t.getTime()}`;
+        let x = per.get(k);
+        if (!x) { x = { rf: 0, sf: 0, hasR: false, hasS: false }; per.set(k, x); }
+        if (r.rf !== null) { x.rf += r.rf; x.hasR = true; }
+        if (r.sf !== null) { x.sf += r.sf; x.hasS = true; }
+    }
+    const agg = new Map<string, { rf: number; nr: number; sf: number; ns: number }>();
+    per.forEach((x, k) => {
+        const [skill, t] = k.split("|");
+        const hr = new Date(Number(t)).getHours();
+        const kk = `${skill}|${hr}`;
+        let g = agg.get(kk);
+        if (!g) { g = { rf: 0, nr: 0, sf: 0, ns: 0 }; agg.set(kk, g); }
+        if (x.hasR) { g.rf += x.rf; g.nr++; }
+        if (x.hasS) { g.sf += x.sf; g.ns++; }
+    });
+    const out: CoverCell[] = [];
+    for (const skill of skills) {
+        for (let h = 0; h < 24; h++) {
+            const g = agg.get(`${skill}|${h}`);
+            const rf = g && g.nr ? g.rf / g.nr : null, sf = g && g.ns ? g.sf / g.ns : null;
+            out.push({ skill, hour: h, rf, sf, v: rf && sf !== null ? (sf - rf) / rf : null });
+        }
+    }
+    return out;
+}
+
+/** Average scheduled FTE by skill and level (agent-grain rows). */
+export function levelMix(rows: Row[]): Map<string, Map<string, number>> {
+    const per = new Map<string, number>(); const ts = new Map<string, Set<number>>();
+    for (const r of rows) {
+        if (!r.skill || !r.level || r.sf === null) { continue; }
+        const k = `${r.skill}|${r.level}`;
+        per.set(k, (per.get(k) ?? 0) + r.sf);
+        const sk = ts.get(r.skill) ?? new Set<number>(); sk.add(r.t.getTime()); ts.set(r.skill, sk);
+    }
+    const out = new Map<string, Map<string, number>>();
+    per.forEach((v, k) => {
+        const [skill, level] = k.split("|");
+        const mm = out.get(skill) ?? new Map<string, number>();
+        mm.set(level, v / Math.max(1, ts.get(skill)!.size));
+        out.set(skill, mm);
+    });
+    return out;
 }
 
 // Heatmap: day x hour staffing variance %, from hourly buckets.

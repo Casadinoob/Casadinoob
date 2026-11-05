@@ -1,5 +1,16 @@
 {
-  "privileges": [],
+  "privileges": [
+    {
+      "name": "WebAccess",
+      "essential": false,
+      "parameters": [
+        "https://*.logic.azure.com",
+        "https://*.api.powerplatform.com",
+        "https://*.azurewebsites.net",
+        "https://*.azure-api.net"
+      ]
+    }
+  ],
   "supportsLandingPage": true,
   "supportsEmptyDataView": true,
   "tooltips": {
@@ -16,10 +27,22 @@
       "description": "Start timestamp of each 15/30/60-minute interval"
     },
     {
-      "name": "queue",
-      "displayName": "Queue / Skill",
+      "name": "skill",
+      "displayName": "Skill / Queue",
       "kind": "Grouping",
-      "description": "Optional. Shown in tooltips"
+      "description": "Skill or queue. Enables skill-based planning"
+    },
+    {
+      "name": "team",
+      "displayName": "Team",
+      "kind": "Grouping",
+      "description": "Optional. Enables SLA per team"
+    },
+    {
+      "name": "level",
+      "displayName": "Level / Tier",
+      "kind": "Grouping",
+      "description": "Optional. Agent level (L1/L2/L3, Junior/Senior\u2026)"
     },
     {
       "name": "agent",
@@ -94,7 +117,17 @@
             },
             {
               "for": {
-                "in": "queue"
+                "in": "skill"
+              }
+            },
+            {
+              "for": {
+                "in": "team"
+              }
+            },
+            {
+              "for": {
+                "in": "level"
               }
             },
             {
@@ -303,25 +336,6 @@
         }
       }
     },
-    "targets": {
-      "properties": {
-        "serviceLevelTarget": {
-          "type": {
-            "numeric": true
-          }
-        },
-        "accuracyTarget": {
-          "type": {
-            "numeric": true
-          }
-        },
-        "staffingTolerance": {
-          "type": {
-            "numeric": true
-          }
-        }
-      }
-    },
     "sections": {
       "properties": {
         "showKpis": {
@@ -342,6 +356,20 @@
         "showRoster": {
           "type": {
             "bool": true
+          }
+        }
+      }
+    },
+    "store": {
+      "properties": {
+        "settingsJson": {
+          "type": {
+            "text": true
+          }
+        },
+        "driversJson": {
+          "type": {
+            "text": true
           }
         }
       }
