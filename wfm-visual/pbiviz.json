@@ -1,0 +1,22 @@
+{
+  "visual": {
+    "name": "wfmCommandCenter",
+    "displayName": "WFM Command Center",
+    "guid": "wfmCommandCenter7F3A91C2D4E54B6A",
+    "visualClassName": "Visual",
+    "version": "1.0.0.0",
+    "description": "Workforce management command center: intraday, daily and weekly forecast vs actual volume, AHT, service level and staffing, with a staffing-variance heatmap, interval grid and agent roster with avatars.",
+    "supportUrl": "https://example.com/support",
+    "gitHubUrl": "https://github.com/casadinoob/casadinoob"
+  },
+  "apiVersion": "5.11.0",
+  "author": {
+    "name": "Casadinoob",
+    "email": "prodbyyassine@gmail.com"
+  },
+  "assets": {
+    "icon": "assets/icon.png"
+  },
+  "style": "style/visual.less",
+  "capabilities": "capabilities.json"
+}

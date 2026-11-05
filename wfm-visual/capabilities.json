@@ -1,0 +1,350 @@
+{
+  "privileges": [],
+  "supportsLandingPage": true,
+  "supportsEmptyDataView": true,
+  "tooltips": {
+    "supportedTypes": {
+      "default": true,
+      "canvas": true
+    }
+  },
+  "dataRoles": [
+    {
+      "name": "interval",
+      "displayName": "Interval (date/time)",
+      "kind": "Grouping",
+      "description": "Start timestamp of each 15/30/60-minute interval"
+    },
+    {
+      "name": "queue",
+      "displayName": "Queue / Skill",
+      "kind": "Grouping",
+      "description": "Optional. Shown in tooltips"
+    },
+    {
+      "name": "agent",
+      "displayName": "Agent / Team",
+      "kind": "Grouping",
+      "description": "Optional. Enables the roster panel"
+    },
+    {
+      "name": "avatarUrl",
+      "displayName": "Avatar image URL",
+      "kind": "Grouping",
+      "description": "Optional. https or data: image URL for each agent/team"
+    },
+    {
+      "name": "forecastVolume",
+      "displayName": "Forecast volume",
+      "kind": "Measure"
+    },
+    {
+      "name": "actualVolume",
+      "displayName": "Actual volume",
+      "kind": "Measure"
+    },
+    {
+      "name": "forecastAht",
+      "displayName": "Forecast AHT (sec)",
+      "kind": "Measure"
+    },
+    {
+      "name": "actualAht",
+      "displayName": "Actual AHT (sec)",
+      "kind": "Measure"
+    },
+    {
+      "name": "requiredFte",
+      "displayName": "Required FTE",
+      "kind": "Measure"
+    },
+    {
+      "name": "scheduledFte",
+      "displayName": "Scheduled FTE",
+      "kind": "Measure"
+    },
+    {
+      "name": "serviceLevel",
+      "displayName": "Service level (0-1)",
+      "kind": "Measure"
+    },
+    {
+      "name": "adherence",
+      "displayName": "Adherence (0-1)",
+      "kind": "Measure"
+    }
+  ],
+  "dataViewMappings": [
+    {
+      "conditions": [
+        {
+          "interval": {
+            "min": 1,
+            "max": 1
+          }
+        }
+      ],
+      "table": {
+        "rows": {
+          "select": [
+            {
+              "for": {
+                "in": "interval"
+              }
+            },
+            {
+              "for": {
+                "in": "queue"
+              }
+            },
+            {
+              "for": {
+                "in": "agent"
+              }
+            },
+            {
+              "for": {
+                "in": "avatarUrl"
+              }
+            },
+            {
+              "for": {
+                "in": "forecastVolume"
+              }
+            },
+            {
+              "for": {
+                "in": "actualVolume"
+              }
+            },
+            {
+              "for": {
+                "in": "forecastAht"
+              }
+            },
+            {
+              "for": {
+                "in": "actualAht"
+              }
+            },
+            {
+              "for": {
+                "in": "requiredFte"
+              }
+            },
+            {
+              "for": {
+                "in": "scheduledFte"
+              }
+            },
+            {
+              "for": {
+                "in": "serviceLevel"
+              }
+            },
+            {
+              "for": {
+                "in": "adherence"
+              }
+            }
+          ],
+          "dataReductionAlgorithm": {
+            "top": {
+              "count": 30000
+            }
+          }
+        }
+      }
+    }
+  ],
+  "objects": {
+    "general": {
+      "properties": {
+        "defaultView": {
+          "type": {
+            "enumeration": [
+              {
+                "value": "intraday",
+                "displayName": "Intraday"
+              },
+              {
+                "value": "daily",
+                "displayName": "Daily"
+              },
+              {
+                "value": "weekly",
+                "displayName": "Weekly"
+              }
+            ]
+          }
+        },
+        "weekStart": {
+          "type": {
+            "enumeration": [
+              {
+                "value": "1",
+                "displayName": "Monday"
+              },
+              {
+                "value": "0",
+                "displayName": "Sunday"
+              }
+            ]
+          }
+        },
+        "intradayResolution": {
+          "type": {
+            "enumeration": [
+              {
+                "value": "hourly",
+                "displayName": "Hourly"
+              },
+              {
+                "value": "native",
+                "displayName": "Native interval"
+              }
+            ]
+          }
+        },
+        "fontFamily": {
+          "type": {
+            "enumeration": [
+              {
+                "value": "inter",
+                "displayName": "Inter (bundled)"
+              },
+              {
+                "value": "segoe",
+                "displayName": "Segoe UI"
+              },
+              {
+                "value": "din",
+                "displayName": "DIN"
+              },
+              {
+                "value": "calibri",
+                "displayName": "Calibri"
+              }
+            ]
+          }
+        },
+        "theme": {
+          "type": {
+            "enumeration": [
+              {
+                "value": "light",
+                "displayName": "Light"
+              },
+              {
+                "value": "dark",
+                "displayName": "Dark"
+              }
+            ]
+          }
+        },
+        "title": {
+          "type": {
+            "text": true
+          }
+        },
+        "logoUrl": {
+          "type": {
+            "text": true
+          }
+        }
+      }
+    },
+    "colors": {
+      "properties": {
+        "actual": {
+          "type": {
+            "fill": {
+              "solid": {
+                "color": true
+              }
+            }
+          }
+        },
+        "forecast": {
+          "type": {
+            "fill": {
+              "solid": {
+                "color": true
+              }
+            }
+          }
+        },
+        "under": {
+          "type": {
+            "fill": {
+              "solid": {
+                "color": true
+              }
+            }
+          }
+        },
+        "ok": {
+          "type": {
+            "fill": {
+              "solid": {
+                "color": true
+              }
+            }
+          }
+        },
+        "over": {
+          "type": {
+            "fill": {
+              "solid": {
+                "color": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "targets": {
+      "properties": {
+        "serviceLevelTarget": {
+          "type": {
+            "numeric": true
+          }
+        },
+        "accuracyTarget": {
+          "type": {
+            "numeric": true
+          }
+        },
+        "staffingTolerance": {
+          "type": {
+            "numeric": true
+          }
+        }
+      }
+    },
+    "sections": {
+      "properties": {
+        "showKpis": {
+          "type": {
+            "bool": true
+          }
+        },
+        "showHeatmap": {
+          "type": {
+            "bool": true
+          }
+        },
+        "showTable": {
+          "type": {
+            "bool": true
+          }
+        },
+        "showRoster": {
+          "type": {
+            "bool": true
+          }
+        }
+      }
+    }
+  }
+}
