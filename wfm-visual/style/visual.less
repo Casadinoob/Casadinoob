@@ -120,4 +120,19 @@
     .fld-err { color: var(--under); font-weight: 500; font-size: 11px; }
     .seg button.dis { opacity: .35; cursor: not-allowed; }
     .empty code { background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+
+    button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--over) !important; outline-offset: 2px; }
+    svg rect.hit:focus-visible { outline: none !important; stroke: var(--over); stroke-width: 2; fill: rgba(100,130,200,.14); }
+    button:disabled { cursor: not-allowed; }
+    &.hc {
+        .card, .kpi, .hb, .chip, .btn, .tbl { border: 1px solid var(--ink); }
+        .hd { border-bottom: 2px solid var(--ink); }
+        .seg button.on, .pages button.on, .chip.on, .btn.pri { background: var(--ink); color: var(--bg); box-shadow: none; }
+        .seg, .nav button { background: transparent; border: 1px solid var(--ink); }
+        .seg button, .pages button, .nav, .nav button { color: var(--ink); }
+        svg .grid-l { stroke: var(--ink); opacity: .35; }
+        svg rect[fill], svg polyline { stroke-width: 2; }
+        td.good, td.bad, td.over, .pill { font-weight: 700; text-decoration: underline; text-decoration-style: dotted; }
+        .bar, .mixbar, .cc { outline: 1px solid var(--ink); }
+    }
 }

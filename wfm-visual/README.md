@@ -74,6 +74,10 @@ The visual never goes blank silently. Problems show in a **Data health** bar und
 
 Test them: `NODE_PATH=$(npm root -g) node test/health.cjs .tmp/shots-health`.
 
+## Editions
+
+Two packages are built from this repo: a **certified** edition (no network code, no privileges) and a **write-back** edition (optional endpoint). See `CERTIFICATION.md`. `npm run package:certified` / `npm run package:writeback`; prebuilt files are in `releases/`. The sections below on write-back apply to the write-back edition only.
+
 ## Saving settings & drivers (write-back)
 
 Power BI visuals have no native database write-back, so there are two layers:
@@ -89,14 +93,15 @@ Power BI visuals have no native database write-back, so there are two layers:
 
 Notes: saves are sent as a no-CORS `text/plain` POST (no preflight; the response is opaque, so check your flow's run history). *Load* needs the endpoint to return CORS headers — a Power Automate trigger may not, in which case front it with an Azure Function/APIM. The endpoint URL is stored in the report; don't put secrets in it beyond a signed-URL token you're happy for report authors to see.
 
-> **Certification:** the endpoint feature needs the `WebAccess` privilege (hosts `*.logic.azure.com`, `*.api.powerplatform.com`, `*.azurewebsites.net`, `*.azure-api.net`). Microsoft-certified visuals may not make external calls. For a *certified* build, delete the `privileges` entry in `capabilities.json` (the endpoint buttons will then simply fail); a normal AppSource listing is fine with it.
+> **Certification:** the endpoint feature needs the `WebAccess` privilege (hosts `*.logic.azure.com`, `*.api.powerplatform.com`, `*.azurewebsites.net`, `*.azure-api.net`), and certified visuals may not make external calls — so it exists only in the write-back edition.
 
 ## Build / test
 
 ```bash
 npm install
-npm run typecheck && npx eslint src      # must be clean for certification
-npx pbiviz package                       # -> dist/*.pbiviz
+npm run verify                           # tsc + eslint + banned-API scan + npm audit (all must pass)
+npm run package:certified                # -> releases/…7F3A….pbiviz  (certification edition)
+npm run package:writeback                # -> releases/…WB3A….pbiviz  (with optional endpoint)
 node scripts/generate-sample-data.mjs    # -> samples/wfm_intervals.csv (28 days, 2 queues, 8 agents with avatars)
 NODE_PATH=$(npm root -g) node test/harness.cjs .tmp/shots   # renders the built bundle in Chromium with a mock host
 ```

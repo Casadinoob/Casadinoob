@@ -1,10 +1,10 @@
 import { DimStat, CoverCell } from "./data";
 import { Issue, checkUrl } from "./validate";
 import { Driver, DRIVER_TYPES, DRIVER_COLORS, Settings, slTargetFor } from "./store";
-import { esc, fmtN, fmt1, pct, spct, initials, safeImg, clamp, PALETTE, toLocalInput, MONTHS } from "./util";
+import { esc, fmtN, fmt1, pct, spct, initials, safeImg, clamp, PALETTE, paletteColor, toLocalInput, MONTHS } from "./util";
 
-export const skillColor = (s: Settings, name: string, i: number) => s.skills[name]?.color || PALETTE[i % PALETTE.length];
-const levelColor = (s: Settings, name: string, i: number) => s.levels[name]?.color || PALETTE[(i + 3) % PALETTE.length];
+export const skillColor = (s: Settings, name: string, i: number) => s.skills[name]?.color || paletteColor("skill:" + name, i);
+const levelColor = (s: Settings, name: string, i: number) => s.levels[name]?.color || paletteColor("level:" + name, i + 3);
 const levelLabel = (s: Settings, name: string) => s.levels[name]?.label || name;
 
 /** SL bar with target tick */
@@ -23,7 +23,7 @@ export function skillsHtml(c: SkillsCtx): string {
     const S = c.settings, tol = S.staffingTolerance / 100;
     const vis = c.skills.filter(s => !S.skills[s.name]?.hidden).sort((a, b) => (S.skills[a.name]?.priority ?? 99) - (S.skills[b.name]?.priority ?? 99));
     const names = vis.map(s => s.name);
-    const rows = vis.map((s, i) => `<tr data-act="skillfilter" data-skill="${esc(s.name)}" style="cursor:pointer" title="Open in Planning"><td><i class="sw" style="background:${skillColor(S, s.name, i)}"></i>${esc(s.name)}</td>
+    const rows = vis.map((s, i) => `<tr data-act="skillfilter" data-skill="${esc(s.name)}" tabindex="0" role="button" aria-label="${esc(s.name)}: open in Planning" style="cursor:pointer" title="Open in Planning"><td><i class="sw" style="background:${skillColor(S, s.name, i)}"></i>${esc(s.name)}</td>
         <td>${fmtN(s.fvA)}</td><td>${fmtN(s.av)}</td><td class="${s.volVarPct === null ? "" : Math.abs(s.volVarPct) <= .05 ? "good" : "bad"}">${spct(s.volVarPct)}</td>
         <td>${pct(s.accuracy)}</td><td>${s.fa === null ? "–" : Math.round(s.fa)}</td><td>${s.aa === null ? "–" : Math.round(s.aa)}</td>
         <td class="slc">${slBar(s.sl, slTargetFor(S, "skill", s.name))}</td><td>${fmt1(s.rf)}</td><td>${fmt1(s.sf)}</td>${gapCell(s.gapPct, tol)}</tr>`).join("");
@@ -64,13 +64,13 @@ export interface TeamsCtx { teams: DimStat[]; agents: DimStat[]; teamFilter: str
 export function teamsHtml(c: TeamsCtx): string {
     const S = c.settings;
     const chips = [`<button data-act="teamfilter" data-team="" class="chip ${c.teamFilter ? "" : "on"}">All teams</button>`, ...c.teams.map(t => `<button data-act="teamfilter" data-team="${esc(t.name)}" class="chip ${c.teamFilter === t.name ? "on" : ""}">${esc(t.name)}</button>`)].join("");
-    const trows = c.teams.map(t => `<tr data-act="teamfilter" data-team="${esc(t.name)}" style="cursor:pointer"><td>${esc(t.name)}</td><td>${t.agents}</td><td>${fmtN(t.handled)}</td><td>${t.aa === null ? "–" : Math.round(t.aa)}</td><td class="slc">${slBar(t.sl, slTargetFor(S, "team", t.name))}</td><td>${pct(t.ad)}</td><td>${fmt1(t.sf)}</td></tr>`).join("");
+    const trows = c.teams.map(t => `<tr data-act="teamfilter" data-team="${esc(t.name)}" tabindex="0" role="button" aria-label="Filter agents by ${esc(t.name)}" style="cursor:pointer"><td>${esc(t.name)}</td><td>${t.agents}</td><td>${fmtN(t.handled)}</td><td>${t.aa === null ? "–" : Math.round(t.aa)}</td><td class="slc">${slBar(t.sl, slTargetFor(S, "team", t.name))}</td><td>${pct(t.ad)}</td><td>${fmt1(t.sf)}</td></tr>`).join("");
     const keyOf: Record<string, (a: DimStat) => number | string> = { name: a => a.name.toLowerCase(), team: a => a.team, level: a => a.level, handled: a => a.handled, aa: a => a.aa ?? -1, sl: a => a.sl ?? -1, ad: a => a.ad ?? -1 };
     const list = c.agents.filter(a => !c.teamFilter || a.team === c.teamFilter).sort((x, y) => {
         const f = keyOf[c.sort.k] || keyOf.sl; const a = f(x), b = f(y);
         return (a < b ? -1 : a > b ? 1 : 0) * c.sort.dir;
     }).slice(0, 300);
-    const th = (k: string, l: string) => `<th data-act="sort" data-k="${k}" style="cursor:pointer">${l}${c.sort.k === k ? (c.sort.dir === 1 ? " ▲" : " ▼") : ""}</th>`;
+    const th = (k: string, l: string) => `<th data-act="sort" data-k="${k}" tabindex="0" role="columnheader" aria-sort="${c.sort.k === k ? (c.sort.dir === 1 ? "ascending" : "descending") : "none"}" style="cursor:pointer">${l}${c.sort.k === k ? (c.sort.dir === 1 ? " ▲" : " ▼") : ""}</th>`;
     const arows = list.map(a => {
         const t = slTargetFor(S, "agent");
         return `<tr data-tip="${esc(`${a.name}|Team|${a.team || "–"}|Level|${levelLabel(S, a.level) || "–"}|Service level|${pct(a.sl)}|Adherence|${pct(a.ad)}`)}"><td><div class="agc">${avatar(a.name, a.avatar)}<span>${esc(a.name)}</span></div></td><td>${esc(a.team)}</td><td>${esc(levelLabel(S, a.level))}</td><td>${fmtN(a.handled)}</td><td>${a.aa === null ? "–" : Math.round(a.aa)}</td><td class="slc">${slBar(a.sl, t)}</td><td class="${a.ad === null ? "" : a.ad * 100 >= S.adherenceTarget ? "good" : "bad"}">${pct(a.ad)}</td></tr>`;
@@ -88,7 +88,7 @@ export function driversHtml(c: DriversCtx): string {
     const timeline = driverTimeline(c.drivers);
     const rows = c.drivers.slice().sort((a, b) => a.start.localeCompare(b.start)).map(d => {
         const s = new Date(d.start), en = new Date(d.end);
-        return `<tr data-act="drv-edit" data-id="${esc(d.id)}" style="cursor:pointer" class="${e?.id === d.id ? "sel" : ""}"><td><i class="sw" style="background:${DRIVER_COLORS[d.type]}"></i>${esc(d.name)}</td><td>${esc(d.type)}</td><td>${s.getDate()} ${MONTHS[s.getMonth()]} ${String(s.getHours()).padStart(2, "0")}:${String(s.getMinutes()).padStart(2, "0")} → ${en.getDate()} ${MONTHS[en.getMonth()]} ${String(en.getHours()).padStart(2, "0")}:${String(en.getMinutes()).padStart(2, "0")}</td><td class="${d.volPct > 0 ? "bad" : d.volPct < 0 ? "over" : ""}">${d.volPct > 0 ? "+" : ""}${d.volPct}%</td><td>${d.ahtPct > 0 ? "+" : ""}${d.ahtPct}%</td><td>${d.skills.length ? esc(d.skills.join(", ")) : "All"}</td><td>${esc(d.status)}</td><td>${c.impact.get(d.id) !== undefined ? "+" + fmtN(c.impact.get(d.id)!) : "–"}</td></tr>`;
+        return `<tr data-act="drv-edit" data-id="${esc(d.id)}" tabindex="0" role="button" aria-label="Edit driver ${esc(d.name)}" style="cursor:pointer" class="${e?.id === d.id ? "sel" : ""}"><td><i class="sw" style="background:${DRIVER_COLORS[d.type]}"></i>${esc(d.name)}</td><td>${esc(d.type)}</td><td>${s.getDate()} ${MONTHS[s.getMonth()]} ${String(s.getHours()).padStart(2, "0")}:${String(s.getMinutes()).padStart(2, "0")} → ${en.getDate()} ${MONTHS[en.getMonth()]} ${String(en.getHours()).padStart(2, "0")}:${String(en.getMinutes()).padStart(2, "0")}</td><td class="${d.volPct > 0 ? "bad" : d.volPct < 0 ? "over" : ""}">${d.volPct > 0 ? "+" : ""}${d.volPct}%</td><td>${d.ahtPct > 0 ? "+" : ""}${d.ahtPct}%</td><td>${d.skills.length ? esc(d.skills.join(", ")) : "All"}</td><td>${esc(d.status)}</td><td>${c.impact.get(d.id) !== undefined ? "+" + fmtN(c.impact.get(d.id)!) : "–"}</td></tr>`;
     }).join("");
     const f = (k: keyof Driver) => esc(e ? String((e as any)[k] ?? "") : "");
     const form = e ? `<div class="form" data-form="driver">
@@ -124,7 +124,7 @@ function driverTimeline(ds: Driver[]): string {
 }
 
 // ------------------------------------------------------------------ Settings
-export interface SettingsCtx { settings: Settings; skills: string[]; teams: string[]; levels: string[]; status: string; hasStore: boolean; issues: Issue[]; summary: string[]; }
+export interface SettingsCtx { settings: Settings; skills: string[]; teams: string[]; levels: string[]; status: string; hasStore: boolean; writeBack: boolean; issues: Issue[]; summary: string[]; }
 export function settingsHtml(c: SettingsCtx): string {
     const S = c.settings;
     const num = (f: string, v: number | null, w = 90, ph = "") => `<input type="number" data-s="root" data-f="${f}" value="${v ?? ""}" placeholder="${ph}" style="width:${w}px">`;
@@ -146,12 +146,12 @@ export function settingsHtml(c: SettingsCtx): string {
         <label>Heatmap from hour${num("heatFrom", S.heatFrom, 70)}</label>
         <label>Heatmap to hour${num("heatTo", S.heatTo, 70)}</label>
         <label class="wide"><span><input type="checkbox" data-s="root" data-f="applyDrivers" ${S.applyDrivers ? "checked" : ""}> Apply drivers to forecast &amp; required FTE</span></label></div></div>
-      <div class="card"><h3>Write-back</h3><div class="form">
+      ${c.writeBack ? `      <div class="card"><h3>Write-back</h3><div class="form">
         <label class="wide"><span><input type="checkbox" data-s="wb" data-f="enabled" ${wb.enabled ? "checked" : ""}> Enable write-back to my endpoint</span></label>
         <label class="wide">Endpoint URL (https)<input data-s="wb" data-f="url" value="${esc(wb.url)}" placeholder="https://prod-00.westeurope.logic.azure.com/workflows/…">${wb.url && checkUrl(wb.url) ? `<span class="fld-err">${esc(checkUrl(wb.url)!)}</span>` : ""}</label>
         <label class="wide"><span><input type="checkbox" data-s="wb" data-f="autoSend" ${wb.autoSend ? "checked" : ""}> Send automatically whenever I save a driver or setting</span></label>
         <div class="btns wide"><button class="btn" data-act="wb-send" data-kind="settings">Send settings</button><button class="btn" data-act="wb-send" data-kind="drivers">Send drivers</button><button class="btn" data-act="wb-send" data-kind="forecast">Send adjusted forecast</button><button class="btn" data-act="wb-load">Load from endpoint</button></div>
-        <p class="hint wide">${esc(c.status) || "Settings and drivers are always saved inside the report. The endpoint is optional and lets you also store them in your own system."}</p></div></div></div>
+        <p class="hint wide">${esc(c.status) || "Settings and drivers are always saved inside the report. The endpoint is optional and lets you also store them in your own system."}</p></div></div>` : `<div class="card"><h3>Saving</h3><p class="hint">Settings and drivers are saved inside the report file. Write-back to an external endpoint is not available in this edition.</p></div>`}</div>
       <div class="two"><div class="card"><h3>Skills</h3><div class="tbl"><table><thead><tr><th>Skill</th><th>Color</th><th>SL target %</th><th>Priority</th><th>Hide</th></tr></thead><tbody>${skills || `<tr><td colspan="5" class="empty">No skills in data</td></tr>`}</tbody></table></div></div>
       <div class="card"><h3>Teams</h3><div class="tbl"><table><thead><tr><th>Team</th><th>SL target %</th></tr></thead><tbody>${teams || `<tr><td colspan="2" class="empty">No teams in data</td></tr>`}</tbody></table></div>
       <h3 style="margin-top:12px">Levels</h3><div class="tbl"><table><thead><tr><th>Level</th><th>Display name</th><th>Color</th></tr></thead><tbody>${levels || `<tr><td colspan="3" class="empty">No levels in data</td></tr>`}</tbody></table></div></div></div>

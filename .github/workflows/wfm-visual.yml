@@ -1,0 +1,20 @@
+name: wfm-visual
+on:
+  push:
+    paths: ["wfm-visual/**"]
+  pull_request:
+    paths: ["wfm-visual/**"]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: wfm-visual } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: wfm-visual/package-lock.json }
+      - run: npm ci
+      - run: npm run verify
+      - run: npm run package:certified
+      - run: npm run package:writeback
+      - uses: actions/upload-artifact@v4
+        with: { name: pbiviz, path: wfm-visual/releases/*.pbiviz }

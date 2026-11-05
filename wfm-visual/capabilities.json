@@ -1,16 +1,5 @@
 {
-  "privileges": [
-    {
-      "name": "WebAccess",
-      "essential": false,
-      "parameters": [
-        "https://*.logic.azure.com",
-        "https://*.api.powerplatform.com",
-        "https://*.azurewebsites.net",
-        "https://*.azure-api.net"
-      ]
-    }
-  ],
+  "privileges": [],
   "supportsLandingPage": true,
   "supportsEmptyDataView": true,
   "tooltips": {
@@ -24,77 +13,91 @@
       "name": "interval",
       "displayName": "Interval (date/time)",
       "kind": "Grouping",
-      "description": "Start timestamp of each 15/30/60-minute interval"
+      "description": "Start timestamp of each 15/30/60-minute interval",
+      "displayNameKey": "Role_interval"
     },
     {
       "name": "skill",
       "displayName": "Skill / Queue",
       "kind": "Grouping",
-      "description": "Skill or queue. Enables skill-based planning"
+      "description": "Skill or queue. Enables skill-based planning",
+      "displayNameKey": "Role_skill"
     },
     {
       "name": "team",
       "displayName": "Team",
       "kind": "Grouping",
-      "description": "Optional. Enables SLA per team"
+      "description": "Optional. Enables SLA per team",
+      "displayNameKey": "Role_team"
     },
     {
       "name": "level",
       "displayName": "Level / Tier",
       "kind": "Grouping",
-      "description": "Optional. Agent level (L1/L2/L3, Junior/Senior\u2026)"
+      "description": "Optional. Agent level (L1/L2/L3, Junior/Senior\u2026)",
+      "displayNameKey": "Role_level"
     },
     {
       "name": "agent",
       "displayName": "Agent / Team",
       "kind": "Grouping",
-      "description": "Optional. Enables the roster panel"
+      "description": "Optional. Enables the roster panel",
+      "displayNameKey": "Role_agent"
     },
     {
       "name": "avatarUrl",
       "displayName": "Avatar image URL",
       "kind": "Grouping",
-      "description": "Optional. https or data: image URL for each agent/team"
+      "description": "Optional. https or data: image URL for each agent/team",
+      "displayNameKey": "Role_avatarUrl"
     },
     {
       "name": "forecastVolume",
       "displayName": "Forecast volume",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_forecastVolume"
     },
     {
       "name": "actualVolume",
       "displayName": "Actual volume",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_actualVolume"
     },
     {
       "name": "forecastAht",
       "displayName": "Forecast AHT (sec)",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_forecastAht"
     },
     {
       "name": "actualAht",
       "displayName": "Actual AHT (sec)",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_actualAht"
     },
     {
       "name": "requiredFte",
       "displayName": "Required FTE",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_requiredFte"
     },
     {
       "name": "scheduledFte",
       "displayName": "Scheduled FTE",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_scheduledFte"
     },
     {
       "name": "serviceLevel",
       "displayName": "Service level (0-1)",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_serviceLevel"
     },
     {
       "name": "adherence",
       "displayName": "Adherence (0-1)",
-      "kind": "Measure"
+      "kind": "Measure",
+      "displayNameKey": "Role_adherence"
     }
   ],
   "dataViewMappings": [
@@ -209,7 +212,8 @@
                 "displayName": "Weekly"
               }
             ]
-          }
+          },
+          "displayNameKey": "Prop_defaultView"
         },
         "weekStart": {
           "type": {
@@ -223,7 +227,8 @@
                 "displayName": "Sunday"
               }
             ]
-          }
+          },
+          "displayNameKey": "Prop_weekStart"
         },
         "intradayResolution": {
           "type": {
@@ -237,7 +242,8 @@
                 "displayName": "Native interval"
               }
             ]
-          }
+          },
+          "displayNameKey": "Prop_intradayResolution"
         },
         "fontFamily": {
           "type": {
@@ -259,7 +265,8 @@
                 "displayName": "Calibri"
               }
             ]
-          }
+          },
+          "displayNameKey": "Prop_fontFamily"
         },
         "theme": {
           "type": {
@@ -273,19 +280,23 @@
                 "displayName": "Dark"
               }
             ]
-          }
+          },
+          "displayNameKey": "Prop_theme"
         },
         "title": {
           "type": {
             "text": true
-          }
+          },
+          "displayNameKey": "Prop_title"
         },
         "logoUrl": {
           "type": {
             "text": true
-          }
+          },
+          "displayNameKey": "Prop_logoUrl"
         }
-      }
+      },
+      "displayNameKey": "Obj_general"
     },
     "colors": {
       "properties": {
@@ -296,7 +307,8 @@
                 "color": true
               }
             }
-          }
+          },
+          "displayNameKey": "Prop_actual"
         },
         "forecast": {
           "type": {
@@ -305,7 +317,8 @@
                 "color": true
               }
             }
-          }
+          },
+          "displayNameKey": "Prop_forecast"
         },
         "under": {
           "type": {
@@ -314,7 +327,8 @@
                 "color": true
               }
             }
-          }
+          },
+          "displayNameKey": "Prop_under"
         },
         "ok": {
           "type": {
@@ -323,7 +337,8 @@
                 "color": true
               }
             }
-          }
+          },
+          "displayNameKey": "Prop_ok"
         },
         "over": {
           "type": {
@@ -332,38 +347,46 @@
                 "color": true
               }
             }
-          }
+          },
+          "displayNameKey": "Prop_over"
         }
-      }
+      },
+      "displayNameKey": "Obj_colors"
     },
     "sections": {
       "properties": {
         "showKpis": {
           "type": {
             "bool": true
-          }
+          },
+          "displayNameKey": "Prop_showKpis"
         },
         "showHeatmap": {
           "type": {
             "bool": true
-          }
+          },
+          "displayNameKey": "Prop_showHeatmap"
         },
         "showTable": {
           "type": {
             "bool": true
-          }
+          },
+          "displayNameKey": "Prop_showTable"
         },
         "showRoster": {
           "type": {
             "bool": true
-          }
+          },
+          "displayNameKey": "Prop_showRoster"
         },
         "showWarnings": {
           "type": {
             "bool": true
-          }
+          },
+          "displayNameKey": "Prop_showWarnings"
         }
-      }
+      },
+      "displayNameKey": "Obj_sections"
     },
     "store": {
       "properties": {
@@ -379,5 +402,7 @@
         }
       }
     }
-  }
+  },
+  "supportsKeyboardFocus": true,
+  "supportsMultiVisualSelection": true
 }

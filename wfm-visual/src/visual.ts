@@ -7,11 +7,12 @@ import {
     dayStart, addDays, dayLabel, dowName, intervalMinutes, Kpis, HeatCell, DimStat
 } from "./data";
 import {
-    Store, Driver, parseStoreChecked, parseStore, applyDrivers, driverApplies, slTargetFor, defaultSettings, sendWriteBack, loadWriteBack, DRIVER_COLORS
+    Store, Driver, parseStoreChecked, parseStore, applyDrivers, driverApplies, slTargetFor, defaultSettings, DRIVER_COLORS
 } from "./store";
+import { sendWriteBack, loadWriteBack, WRITE_BACK_AVAILABLE } from "./net";
 import { skillsHtml, teamsHtml, driversHtml, settingsHtml, skillColor, issuesHtml } from "./pages";
 import { Issue, dataIssues, configIssues, pageNeeds, worst, ROLE_LABEL } from "./validate";
-import { esc, safeImg, fmtN, fmt1, pct, spct, initials, clamp, fmtDate, setHtml, PALETTE, toLocalInput, fromLocalInput } from "./util";
+import { esc, safeImg, fmtN, fmt1, pct, spct, initials, clamp, fmtDate, setHtml, PALETTE, paletteColor, setPalette, attr, toLocalInput, fromLocalInput } from "./util";
 
 import IVisual = powerbi.extensibility.visual.IVisual;
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
@@ -19,6 +20,7 @@ import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
 import ISelectionManager = powerbi.extensibility.ISelectionManager;
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
 import ITooltipService = powerbi.extensibility.ITooltipService;
+import ILocalizationManager = powerbi.extensibility.ILocalizationManager;
 
 const FONT_STACKS: Record<string, string> = {
     inter: `"WFM Inter", "Segoe UI", system-ui, sans-serif`,
@@ -27,7 +29,7 @@ const FONT_STACKS: Record<string, string> = {
     calibri: `"Calibri", "Segoe UI", system-ui, sans-serif`
 };
 type Page = "planning" | "skills" | "teams" | "drivers" | "settings";
-const PAGES: [Page, string][] = [["planning", "Planning"], ["skills", "Skills & Levels"], ["teams", "Teams & Agents"], ["drivers", "Drivers"], ["settings", "Settings"]];
+const PAGES: [Page, string, string][] = [["planning", "Page_planning", "Planning"], ["skills", "Page_skills", "Skills & Levels"], ["teams", "Page_teams", "Teams & Agents"], ["drivers", "Page_drivers", "Drivers"], ["settings", "Page_settings", "Settings"]];
 const uid = () => "d" + Date.now().toString(36) + Array.from(window.crypto.getRandomValues(new Uint8Array(3)), b => b.toString(16)).join("");
 
 interface Series { vals: (number | null)[]; color: string; axis: "l" | "r"; dash?: string; label: string; }
@@ -37,7 +39,7 @@ export class Visual implements IVisual {
     private root: HTMLElement;
     private selection: ISelectionManager;
     private tooltip: ITooltipService;
-    private fs = new FormattingSettingsService();
+    private fs: FormattingSettingsService;
     private settings = new VisualSettings();
 
     private table: powerbi.DataViewTable | undefined;
@@ -47,7 +49,9 @@ export class Visual implements IVisual {
     private page: Page = "planning";
     private view: ViewMode | null = null;
     private anchor: Date | null = null;
-    private selectedKey: string | null = null;
+    private selected = new Set<string>();
+    private L: ILocalizationManager | null = null;
+    private interactive = true;
     private buckets: Bucket[] = [];
     private baseFv = new Map<string, number>();
     private bDrivers = new Map<string, Driver[]>();
@@ -76,11 +80,17 @@ export class Visual implements IVisual {
         this.host = options.host;
         this.selection = this.host.createSelectionManager();
         this.tooltip = this.host.tooltipService;
+        try { this.L = this.host.createLocalizationManager(); } catch { this.L = null; }
+        this.fs = new FormattingSettingsService(this.L ?? undefined);
+        try { setPalette(k => this.host.colorPalette.getColor(k).value); } catch { setPalette(null); }
         this.root = document.createElement("div");
         this.root.className = "wfm";
         options.element.appendChild(this.root);
 
         this.root.addEventListener("click", e => this.onClick(e));
+        this.root.addEventListener("contextmenu", e => this.onContext(e));
+        this.root.addEventListener("keydown", e => this.onKey(e));
+        this.root.ownerDocument.addEventListener("keydown", e => { if (e.key === "Escape" && !this.root.contains(e.target as Node) && this.selected.size) { this.clearSelection(); this.render(); } });
         this.root.addEventListener("change", e => this.onChange(e));
         this.root.addEventListener("mousemove", e => this.onMove(e));
         this.root.addEventListener("mouseleave", () => this.tooltip.hide({ immediately: true, isTouchEvent: false }));
@@ -126,7 +136,8 @@ export class Visual implements IVisual {
             this.issues = dataIssues({ stats: parsed.stats, bound: parsed.bound, truncated: this.truncated, rowCap: parsed.rows.length });
             if (key !== this.dataKey || !this.anchor) { this.dataKey = key; this.anchor = this.anchor ?? this.maxDay; }
             this.anchor = new Date(clamp(this.anchor.getTime(), this.minDay.getTime(), this.maxDay.getTime()));
-            if (!this.selection.getSelectionIds().length) { this.selectedKey = null; }
+            if (!this.selection.getSelectionIds().length) { this.selected.clear(); }
+            this.interactive = (this.host.hostCapabilities as { allowInteractions?: boolean } | undefined)?.allowInteractions !== false;
             this.render();
             this.host.eventService.renderingFinished(options);
         } catch (e) {
@@ -174,6 +185,11 @@ export class Visual implements IVisual {
     }
 
     // ---------------------------------------------------------------- render
+    /** Localised string with English fallback. */
+    private t(key: string, fb: string): string {
+        try { const x = this.L?.getDisplayName(key); return x && x !== key ? x : fb; } catch { return fb; }
+    }
+
     private colors() {
         const c = this.settings.colors;
         return { actual: c.actual.value.value, forecast: c.forecast.value.value, under: c.under.value.value, ok: c.ok.value.value, over: c.over.value.value };
@@ -190,10 +206,30 @@ export class Visual implements IVisual {
     private distinct(f: (r: Row) => string): string[] { return Array.from(new Set(this.rows.map(f).filter(Boolean))).sort(); }
 
     private render(): void {
-        try { this.renderCore(); this.fatal = ""; } catch (e) {
+        const fk = this.focusKey();
+        try { this.renderCore(); this.fatal = ""; this.restoreFocus(fk); } catch (e) {
             this.fatal = String(e);
             setHtml(this.root, `<div class="empty"><strong>Something went wrong while drawing this visual.</strong><br><br><code>${esc(this.fatal)}</code><br><br><button class="btn pri" data-act="recover">Reset view</button><br><br><span class="hint">If this keeps happening, check the Data health notes in Settings → or re-bind the fields.</span></div>`);
         }
+    }
+
+    /** Keyboard users: re-rendering replaces the DOM, so remember which control had focus and put it back. */
+    private focusKey(): string | null {
+        const a = this.root.ownerDocument.activeElement as HTMLElement | null;
+        if (!a || !this.root.contains(a) || a === this.root) { return null; }
+        const parts: string[] = [];
+        const chart = a.closest("[data-chart]")?.getAttribute("data-chart");
+        if (chart) { parts.push(`[data-chart="${chart}"]`); }
+        parts.push(a.tagName.toLowerCase() + (a.classList.contains("hit") ? ".hit" : ""));
+        for (const k of ["id", "data-act", "data-p", "data-v", "data-key", "data-skill", "data-team", "data-id", "data-k", "data-s", "data-n", "data-f"]) {
+            const val = a.getAttribute(k); if (val !== null) { parts.push(`[${k}="${val.replace(/"/g, '\\"')}"]`); }
+        }
+        return parts.join("").replace(/^(\[data-chart="[^"]*"\])/, "$1 ");
+    }
+
+    private restoreFocus(key: string | null): void {
+        if (!key) { return; }
+        try { const el = this.root.querySelector<HTMLElement>(key); if (el) { el.setAttribute("tabindex", el.getAttribute("tabindex") ?? "0"); el.focus({ preventScroll: true }); } } catch { /* selector not valid any more: ignore */ }
     }
 
     private bannerHtml(is: Issue[]): string {
@@ -201,15 +237,24 @@ export class Visual implements IVisual {
         const w = worst(is)!;
         const open = this.showIssues || w === "error";
         const cnt = (["error", "warn", "info"] as const).map(l => ({ l, n: is.filter(i => i.level === l).length })).filter(x => x.n).map(x => `${x.n} ${x.l === "warn" ? "warning" : x.l}${x.n > 1 ? "s" : ""}`).join(" · ");
-        return `<div class="hb ${w}"><button data-act="issues">${w === "error" ? "⛔" : w === "warn" ? "⚠️" : "ℹ️"} Data health: ${cnt} <span class="chev">${open ? "▴" : "▾"}</span></button>${open ? issuesHtml(is) : ""}</div>`;
+        return `<div class="hb ${w}"><button data-act="issues">${w === "error" ? "⛔" : w === "warn" ? "⚠️" : "ℹ️"} ${esc(this.t("Health_title", "Data health"))}: ${cnt} <span class="chev">${open ? "▴" : "▾"}</span></button>${open ? issuesHtml(is) : ""}</div>`;
     }
 
     private renderCore(): void {
         const g = this.settings.general;
         const col = this.colors();
         const dark = g.theme.value.value === "dark";
-        this.root.className = "wfm" + (dark ? " dark" : "");
+        const cp = this.host.colorPalette as { isHighContrast?: boolean; foreground?: { value: string }; background?: { value: string }; foregroundSelected?: { value: string }; hyperlink?: { value: string } } | undefined;
+        const hc = !!cp?.isHighContrast;
+        this.root.className = "wfm" + (dark ? " dark" : "") + (hc ? " hc" : "");
         const st = this.root.style;
+        for (const k of ["--bg", "--panel", "--ink", "--muted", "--line", "--head", "--head-ink", "--chip"]) { st.removeProperty(k); }
+        if (hc && cp) {
+            const fg = cp.foreground?.value ?? "#ffffff", bg = cp.background?.value ?? "#000000", sel = cp.foregroundSelected?.value ?? fg, link = cp.hyperlink?.value ?? fg;
+            st.setProperty("--bg", bg); st.setProperty("--panel", bg); st.setProperty("--ink", fg); st.setProperty("--muted", fg); st.setProperty("--line", fg);
+            st.setProperty("--head", bg); st.setProperty("--head-ink", fg); st.setProperty("--chip", bg);
+            Object.assign(col, { actual: fg, forecast: sel, under: sel, ok: fg, over: link });
+        }
         st.setProperty("--actual", col.actual); st.setProperty("--forecast", col.forecast);
         st.setProperty("--under", col.under); st.setProperty("--ok", col.ok); st.setProperty("--over", col.over);
         st.setProperty("--font", FONT_STACKS[g.fontFamily.value.value] || FONT_STACKS.inter);
@@ -221,11 +266,11 @@ export class Visual implements IVisual {
         const showView = this.page === "planning" || this.page === "skills" || this.page === "teams";
         const range = view === "intraday" ? dayLabel(this.anchor ?? new Date()) + " " + (this.anchor ?? new Date()).getFullYear() : `${fmtDate(win.from)} – ${fmtDate(addDays(win.to, -1))}`;
 
-        let h = `<div class="hd">${logo ? `<img class="logo" src="${esc(logo)}" alt="">` : ""}<div class="ttl">${esc(g.title.value)}</div>`;
-        h += `<nav class="pages">${PAGES.map(([p, l]) => `<button data-act="page" data-p="${p}" class="${p === this.page ? "on" : ""}">${l}</button>`).join("")}</nav><div class="grow"></div>`;
+        let h = `<div class="hd">${logo ? `<img class="logo" src="${esc(logo)}" alt="">` : ""}<div class="ttl" role="heading" aria-level="1">${esc(g.title.value)}</div>`;
+        h += `<nav class="pages" role="tablist">${PAGES.map(([p, k, l]) => `<button role="tab" aria-selected="${p === this.page}" data-act="page" data-p="${p}" class="${p === this.page ? "on" : ""}">${esc(this.t(k, l))}</button>`).join("")}</nav><div class="grow"></div>`;
         if (showView && this.rows.length) {
-            h += `<div class="seg">${(["intraday", "daily", "weekly"] as ViewMode[]).map(v => (v === "intraday" && this.stats?.dateOnly) ? `<button class="dis" title="Needs a time of day in the Interval field">Intraday</button>` : `<button data-act="view" data-v="${v}" class="${v === view ? "on" : ""}">${v[0].toUpperCase() + v.slice(1)}</button>`).join("")}</div>`;
-            h += `<div class="nav"><button data-act="prev" title="Previous">‹</button><span class="rng">${esc(range)}</span><button data-act="next" title="Next">›</button><button data-act="latest" title="Jump to latest" style="width:auto;padding:0 8px">Latest</button></div>`;
+            h += `<div class="seg">${(["intraday", "daily", "weekly"] as ViewMode[]).map(v => (v === "intraday" && this.stats?.dateOnly) ? `<button class="dis" disabled title="Needs a time of day in the Interval field">${esc(this.t("View_intraday", "Intraday"))}</button>` : `<button data-act="view" data-v="${v}" aria-pressed="${v === view}" class="${v === view ? "on" : ""}">${esc(this.t("View_" + v, v[0].toUpperCase() + v.slice(1)))}</button>`).join("")}</div>`;
+            h += `<div class="nav"><button data-act="prev" aria-label="${esc(this.t("Nav_prev", "Previous"))}" title="${esc(this.t("Nav_prev", "Previous"))}">‹</button><span class="rng" aria-live="polite">${esc(range)}</span><button data-act="next" aria-label="${esc(this.t("Nav_next", "Next"))}" title="${esc(this.t("Nav_next", "Next"))}">›</button><button data-act="latest" title="Jump to latest" style="width:auto;padding:0 8px">${esc(this.t("Nav_latest", "Latest"))}</button></div>`;
         }
         h += `</div><div class="body"><div id="hb"></div><div id="pg" class="stack"></div></div>`;
         setHtml(this.root, h);
@@ -233,7 +278,7 @@ export class Visual implements IVisual {
         const hbEl = this.root.querySelector<HTMLElement>("#hb")!;
         const dataPage = this.page === "planning" || this.page === "skills" || this.page === "teams";
         const cfg = (this.page === "drivers" || this.page === "settings")
-            ? configIssues(this.store.settings, this.store.drivers, this.rows, this.bound, this.stats?.minT ?? 0, this.stats?.maxT ?? 0, this.storeProblems, this.viewMode) : [];
+            ? configIssues(this.store.settings, this.store.drivers, this.rows, this.bound, this.stats?.minT ?? 0, this.stats?.maxT ?? 0, this.storeProblems, this.viewMode, WRITE_BACK_AVAILABLE) : [];
         const allIssues = [...this.issues, ...cfg];
         setHtml(hbEl, this.bannerHtml(allIssues));
         const msg = (title: string, text: string, btns = "") => setHtml(body, `<div class="card"><h3>${esc(title)}</h3><p>${text}</p><div class="btns">${btns}</div></div>`);
@@ -292,22 +337,22 @@ export class Visual implements IVisual {
         let h = "";
         const skills = this.distinct(r => r.skill);
         if (skills.length) {
-            h += `<div class="chips"><button class="chip ${this.fSkill ? "" : "on"}" data-act="skillfilter" data-skill="">All skills</button>${skills.map((s, i) => `<button class="chip ${this.fSkill === s ? "on" : ""}" data-act="skillfilter" data-skill="${esc(s)}"><i class="sw" style="background:${skillColor(cfg, s, i)}"></i>${esc(s)}</button>`).join("")}</div>`;
+            h += `<div class="chips"><button class="chip ${this.fSkill ? "" : "on"}" data-act="skillfilter" data-skill="">${esc(this.t("Lbl_allSkills", "All skills"))}</button>${skills.map((s, i) => `<button class="chip ${this.fSkill === s ? "on" : ""}" data-act="skillfilter" data-skill="${esc(s)}"><i class="sw" style="background:${skillColor(cfg, s, i)}"></i>${esc(s)}</button>`).join("")}</div>`;
         }
         if (S.showKpis.value) { h += this.kpiHtml(K, slTarget, accTarget, tol); }
         h += `<div class="grid${wide && sideOn ? "" : " single"}"><div class="col">`;
-        h += `<div class="card"><h3>Volume · forecast vs actual<span class="lg"><span><i class="sw" style="background:var(--actual)"></i>Actual</span><span><i class="sw" style="background:var(--forecast)"></i>Forecast${hasDrv ? " + drivers" : ""}</span>${hasDrv ? `<span><i class="sw" style="background:var(--muted)"></i>Baseline</span>` : ""}</span></h3><div class="chart" data-chart="vol"></div></div>`;
-        h += `<div class="card"><h3>AHT &amp; service level<span class="lg"><span><i class="sw" style="background:var(--actual)"></i>Actual AHT</span><span><i class="sw" style="background:var(--forecast)"></i>Forecast AHT</span><span><i class="sw" style="background:var(--ok)"></i>Service level</span></span></h3><div class="chart" data-chart="aht"></div></div>`;
-        h += `<div class="card"><h3>Staffing · scheduled vs required FTE<span class="lg"><span><i class="sw" style="background:var(--under)"></i>Under</span><span><i class="sw" style="background:var(--ok)"></i>On target</span><span><i class="sw" style="background:var(--over)"></i>Over</span><span><i class="sw" style="background:var(--ink)"></i>Required</span></span></h3><div class="chart" data-chart="staff"></div></div>`;
-        if (S.showTable.value) { h += `<div class="card"><h3>Interval grid</h3><div class="tbl">${this.tableHtml(tol, slTarget)}</div></div>`; }
+        h += `<div class="card"><h3>${esc(this.t("Chart_volume", "Volume · forecast vs actual"))}<span class="lg"><span><i class="sw" style="background:var(--actual)"></i>Actual</span><span><i class="sw" style="background:var(--forecast)"></i>Forecast${hasDrv ? " + drivers" : ""}</span>${hasDrv ? `<span><i class="sw" style="background:var(--muted)"></i>Baseline</span>` : ""}</span></h3><div class="chart" data-chart="vol"></div></div>`;
+        h += `<div class="card"><h3>${esc(this.t("Chart_aht", "AHT & service level"))}<span class="lg"><span><i class="sw" style="background:var(--actual)"></i>Actual AHT</span><span><i class="sw" style="background:var(--forecast)"></i>Forecast AHT</span><span><i class="sw" style="background:var(--ok)"></i>Service level</span></span></h3><div class="chart" data-chart="aht"></div></div>`;
+        h += `<div class="card"><h3>${esc(this.t("Chart_staffing", "Staffing · scheduled vs required FTE"))}<span class="lg"><span><i class="sw" style="background:var(--under)"></i>Under</span><span><i class="sw" style="background:var(--ok)"></i>On target</span><span><i class="sw" style="background:var(--over)"></i>Over</span><span><i class="sw" style="background:var(--ink)"></i>Required</span></span></h3><div class="chart" data-chart="staff"></div></div>`;
+        if (S.showTable.value) { h += `<div class="card"><h3>${esc(this.t("Chart_grid", "Interval grid"))}</h3><div class="tbl">${this.tableHtml(tol, slTarget)}</div></div>`; }
         h += `</div>`;
         if (sideOn) {
             h += `<div class="col">`;
             if (S.showHeatmap.value) {
-                h += `<div class="card"><h3>Staffing variance heatmap<span class="lg">${view === "intraday" ? "7 days" : "14 days"} · by hour</span></h3><div class="chart" data-chart="heat"></div>
+                h += `<div class="card"><h3>${esc(this.t("Chart_heatmap", "Staffing variance heatmap"))}<span class="lg">${view === "intraday" ? "7 days" : "14 days"} · by hour</span></h3><div class="chart" data-chart="heat"></div>
                       <div class="heatleg"><span>Under</span><i style="background:var(--under)"></i><i style="background:var(--ok);opacity:.6"></i><i style="background:var(--over)"></i><span>Over</span></div></div>`;
             }
-            if (ros.length) { h += `<div class="card"><h3>Agents &amp; teams<span class="lg">${ros.length}</span></h3><div class="roster">${this.rosterHtml(ros)}</div></div>`; }
+            if (ros.length) { h += `<div class="card"><h3>${esc(this.t("Chart_agents", "Agents & teams"))}<span class="lg">${ros.length}</span></h3><div class="roster">${this.rosterHtml(ros)}</div></div>`; }
             h += `</div>`;
         }
         h += `</div>`;
@@ -357,7 +402,7 @@ export class Visual implements IVisual {
         const tnames = teams.map(t => t.name);
         const series: Series[] = tnames.slice(0, 8).map((t, i) => {
             const bm = new Map(bucketize(collapse(wr.filter(r => r.team === t)), keyFn).map(b => [b.key, b.sl] as [string, number | null]));
-            return { vals: this.buckets.map(b => bm.get(b.key) ?? null), color: PALETTE[i % PALETTE.length], axis: "l", label: t };
+            return { vals: this.buckets.map(b => bm.get(b.key) ?? null), color: paletteColor("team:" + t, i), axis: "l", label: t };
         });
         const legend = series.map(s => `<span><i class="sw" style="background:${s.color}"></i>${esc(s.label)}</span>`).join("");
         setHtml(body, teamsHtml({ teams, agents: byDim(wr, "agent"), teamFilter: this.teamFilter, sort: this.sort, settings: cfg, trend: "", trendLegend: legend, rangeLabel: range }));
@@ -397,7 +442,7 @@ export class Visual implements IVisual {
     }
 
     private renderSettings(body: HTMLElement): void {
-        setHtml(body, settingsHtml({ settings: this.store.settings, skills: this.distinct(r => r.skill), teams: this.distinct(r => r.team), levels: this.distinct(r => r.level), status: this.status, hasStore: !(this.viewMode === 0 && !this.hasStore), issues: [...this.issues, ...configIssues(this.store.settings, this.store.drivers, this.rows, this.bound, this.stats?.minT ?? 0, this.stats?.maxT ?? 0, this.storeProblems, this.viewMode)], summary: this.summaryLines() }));
+        setHtml(body, settingsHtml({ settings: this.store.settings, skills: this.distinct(r => r.skill), teams: this.distinct(r => r.team), levels: this.distinct(r => r.level), status: this.status, hasStore: !(this.viewMode === 0 && !this.hasStore), writeBack: WRITE_BACK_AVAILABLE, issues: [...this.issues, ...configIssues(this.store.settings, this.store.drivers, this.rows, this.bound, this.stats?.minT ?? 0, this.stats?.maxT ?? 0, this.storeProblems, this.viewMode, WRITE_BACK_AVAILABLE)], summary: this.summaryLines() }));
     }
 
     // ---------------------------------------------------------------- html parts (planning)
@@ -408,12 +453,12 @@ export class Visual implements IVisual {
         const stfOk = K.gapPct === null ? null : K.gapPct >= -tol;
         const adT = this.store.settings.adherenceTarget / 100;
         return `<div class="kpis">`
-            + card("Volume", fmtN(K.av), `Forecast ${fmtN(K.fvA)} ${varPill(K.volVarPct)}`, cls(K.volVarPct === null ? null : Math.abs(K.volVarPct) <= 0.05))
-            + card("Forecast accuracy", pct(K.accuracy), `Target ${pct(accT, 0)}`, cls(K.accuracy === null ? null : K.accuracy >= accT))
-            + card("AHT (sec)", K.aa === null ? "–" : Math.round(K.aa).toString(), `Forecast ${K.fa === null ? "–" : Math.round(K.fa)} ${varPill(K.ahtVarPct, true)}`, cls(K.ahtVarPct === null ? null : K.ahtVarPct <= 0.05))
-            + card(`Service level (${this.store.settings.slThresholdSec}s)`, pct(K.sl), `Target ${pct(slT, 0)}`, cls(K.sl === null ? null : K.sl >= slT))
-            + card("Staffing (avg FTE)", `${fmt1(K.sf)} <span style="font-size:13px;font-weight:500;color:var(--muted)">/ ${fmt1(K.rf)}</span>`, `Gap ${K.gapFte === null ? "–" : (K.gapFte > 0 ? "+" : "") + K.gapFte.toFixed(1)} FTE ${K.gapPct === null ? "" : `<span class="pill ${stfOk ? "good" : "bad"}">${spct(K.gapPct)}</span>`}`, cls(stfOk))
-            + card("Adherence", pct(K.ad), `Target ${pct(adT, 0)}`, cls(K.ad === null ? null : K.ad >= adT))
+            + card(this.t("KPI_volume", "Volume"), fmtN(K.av), `${this.t("KPI_forecast", "Forecast")} ${fmtN(K.fvA)} ${varPill(K.volVarPct)}`, cls(K.volVarPct === null ? null : Math.abs(K.volVarPct) <= 0.05))
+            + card(this.t("KPI_accuracy", "Forecast accuracy"), pct(K.accuracy), `${this.t("KPI_target", "Target")} ${pct(accT, 0)}`, cls(K.accuracy === null ? null : K.accuracy >= accT))
+            + card(this.t("KPI_aht", "AHT (sec)"), K.aa === null ? "–" : Math.round(K.aa).toString(), `${this.t("KPI_forecast", "Forecast")} ${K.fa === null ? "–" : Math.round(K.fa)} ${varPill(K.ahtVarPct, true)}`, cls(K.ahtVarPct === null ? null : K.ahtVarPct <= 0.05))
+            + card(`${this.t("KPI_sl", "Service level")} (${this.store.settings.slThresholdSec}s)`, pct(K.sl), `${this.t("KPI_target", "Target")} ${pct(slT, 0)}`, cls(K.sl === null ? null : K.sl >= slT))
+            + card(this.t("KPI_staffing", "Staffing (avg FTE)"), `${fmt1(K.sf)} <span style="font-size:13px;font-weight:500;color:var(--muted)">/ ${fmt1(K.rf)}</span>`, `Gap ${K.gapFte === null ? "–" : (K.gapFte > 0 ? "+" : "") + K.gapFte.toFixed(1)} FTE ${K.gapPct === null ? "" : `<span class="pill ${stfOk ? "good" : "bad"}">${spct(K.gapPct)}</span>`}`, cls(stfOk))
+            + card(this.t("KPI_adherence", "Adherence"), pct(K.ad), `${this.t("KPI_target", "Target")} ${pct(adT, 0)}`, cls(K.ad === null ? null : K.ad >= adT))
             + `</div>`;
     }
 
@@ -426,7 +471,7 @@ export class Visual implements IVisual {
             const label = this.view === "intraday" ? b.label : `${b.label} <span style="color:var(--muted);font-weight:400">${esc(b.sub)}</span>`;
             const drv = this.bDrivers.get(b.key);
             const dm = drv ? ` <span class="dtag" style="background:${DRIVER_COLORS[drv[0].type]}" title="${esc(drv.map(d => d.name).join(", "))}">${drv.length > 1 ? drv.length : esc(drv[0].type[0])}</span>` : "";
-            return `<tr data-key="${esc(b.key)}" class="${this.selectedKey === b.key ? "sel" : ""}"><td>${label}${dm}</td><td>${fmtN(b.fv)}</td><td>${fmtN(b.av)}</td><td class="${vv === null ? "" : Math.abs(vv) <= 0.05 ? "good" : "bad"}">${spct(vv)}</td>`
+            return `<tr data-key="${esc(b.key)}" class="${this.selected.has(b.key) ? "sel" : ""}" tabindex="0" aria-label="${attr(`${this.tipHead(b)}: forecast ${fmtN(b.fv)}, actual ${fmtN(b.av)}`)}"><td>${label}${dm}</td><td>${fmtN(b.fv)}</td><td>${fmtN(b.av)}</td><td class="${vv === null ? "" : Math.abs(vv) <= 0.05 ? "good" : "bad"}">${spct(vv)}</td>`
                 + `<td>${b.fa === null ? "–" : Math.round(b.fa)}</td><td>${b.aa === null ? "–" : Math.round(b.aa)}</td><td>${fmt1(b.rf)}</td><td>${fmt1(b.sf)}</td>`
                 + `<td class="${gc}">${gap === null ? "–" : (gap > 0 ? "+" : "") + gap.toFixed(1)}</td><td class="${b.sl === null ? "" : b.sl >= slT ? "good" : "bad"}">${pct(b.sl)}</td></tr>`;
         }).join("");
@@ -465,8 +510,8 @@ export class Visual implements IVisual {
         return { iw, ih, y, band, l, t, b, r, grid: s, labels: this.xLabels(l, band).replace(/__Y__/g, String(h - 6)) };
     }
 
-    private hits(f: { band: number; l: number; t: number; ih: number }, tipFn: (b: Bucket) => string): string {
-        return this.buckets.map((b, i) => `<rect class="hit" data-key="${esc(b.key)}" data-tip="${esc(tipFn(b))}" x="${f.l + f.band * i}" y="${f.t}" width="${f.band}" height="${f.ih}"/>`).join("");
+    private hits(f: { band: number; l: number; t: number; ih: number }, tipFn: (b: Bucket) => string, tab = -1): string {
+        return this.buckets.map((b, i) => `<rect class="hit" tabindex="${tab}" role="button" aria-label="${attr(tipFn(b))}" data-key="${esc(b.key)}" data-tip="${esc(tipFn(b))}" x="${f.l + f.band * i}" y="${f.t}" width="${f.band}" height="${f.ih}"/>`).join("");
     }
 
     private driverBands(f: { band: number; l: number; t: number; ih: number }): string {
@@ -481,7 +526,7 @@ export class Visual implements IVisual {
         return d ? `|Drivers|${d.map(x => `${x.name} ${x.volPct > 0 ? "+" : ""}${x.volPct}%`).join("; ")}` : "";
     }
 
-    private dimCls(b: Bucket) { return this.selectedKey && this.selectedKey !== b.key ? "dim" : ""; }
+    private dimCls(b: Bucket) { return this.selected.size && !this.selected.has(b.key) ? "dim" : ""; }
     private tipHead(b: Bucket): string { return this.view === "intraday" ? b.label : `${b.label} ${b.sub}`; }
 
     private volumeChart(w: number, h: number): string {
@@ -493,7 +538,7 @@ export class Visual implements IVisual {
         const pts = B.map((b, i) => `${f.l + f.band * i + f.band / 2},${f.y(b.fv)}`).join(" ");
         const base = this.baseFv.size ? `<polyline points="${B.map((b, i) => `${f.l + f.band * i + f.band / 2},${f.y(this.baseFv.get(b.key) ?? b.fv)}`).join(" ")}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 3"/>` : "";
         const dots = B.length <= 40 ? B.map((b, i) => `<circle cx="${f.l + f.band * i + f.band / 2}" cy="${f.y(b.fv)}" r="2.6" fill="var(--panel)" stroke="var(--forecast)" stroke-width="1.6"/>`).join("") : "";
-        return `<svg viewBox="0 0 ${w} ${h}" height="${h}">${f.grid}${this.driverBands(f)}${bars}${base}<polyline points="${pts}" fill="none" stroke="var(--forecast)" stroke-width="2" stroke-linejoin="round"/>${dots}${f.labels}${this.hits(f, b => `${this.tipHead(b)}|Forecast|${fmtN(b.fv)}${this.baseFv.size ? `|Baseline|${fmtN(this.baseFv.get(b.key) ?? null)}` : ""}|Actual|${fmtN(b.av)}|Variance|${spct(b.av !== null && b.fvA > 0 ? (b.av - b.fvA) / b.fvA : null)}${this.drvTip(b)}`)}</svg>`;
+        return `<svg viewBox="0 0 ${w} ${h}" height="${h}">${f.grid}${this.driverBands(f)}${bars}${base}<polyline points="${pts}" fill="none" stroke="var(--forecast)" stroke-width="2" stroke-linejoin="round"/>${dots}${f.labels}${this.hits(f, b => `${this.tipHead(b)}|Forecast|${fmtN(b.fv)}${this.baseFv.size ? `|Baseline|${fmtN(this.baseFv.get(b.key) ?? null)}` : ""}|Actual|${fmtN(b.av)}|Variance|${spct(b.av !== null && b.fvA > 0 ? (b.av - b.fvA) / b.fvA : null)}${this.drvTip(b)}`, 0)}</svg>`;
     }
 
     private polyline(f: ReturnType<Visual["frame"]>, sr: Series, rmin: number, rmax: number): string {
@@ -562,15 +607,40 @@ export class Visual implements IVisual {
         const act = t.closest<HTMLElement>("[data-act]");
         if (act) { this.onAct(act); return; }
         const k = t.closest<HTMLElement>("[data-key]");
-        if (k) {
-            const key = k.getAttribute("data-key")!;
-            if (this.selectedKey === key) { this.clearSelection(); this.render(); return; }
-            const b = this.buckets.find(x => x.key === key);
-            if (!b || !this.table) { return; }
-            const ids = b.rows.map(i => this.host.createSelectionIdBuilder().withTable(this.table!, i).createSelectionId());
-            this.selectedKey = key;
-            this.selection.select(ids);
-            this.render();
+        if (k) { this.selectBucket(k.getAttribute("data-key")!, e.ctrlKey || e.metaKey || e.shiftKey); }
+    }
+
+    private selectBucket(key: string, multi: boolean): void {
+        if (!this.interactive || !this.table) { return; }
+        if (!multi && this.selected.size === 1 && this.selected.has(key)) { this.clearSelection(); this.render(); return; }
+        if (multi) { if (this.selected.has(key)) { this.selected.delete(key); } else { this.selected.add(key); } } else { this.selected = new Set([key]); }
+        if (!this.selected.size) { this.clearSelection(); this.render(); return; }
+        const ids: powerbi.visuals.ISelectionId[] = [];
+        this.buckets.filter(b => this.selected.has(b.key)).forEach(b => b.rows.forEach(i => ids.push(this.host.createSelectionIdBuilder().withTable(this.table!, i).createSelectionId())));
+        this.selection.select(ids);
+        this.render();
+    }
+
+    private onContext(e: MouseEvent): void {
+        e.preventDefault();
+        if (!this.interactive || !this.table) { return; }
+        const k = (e.target as HTMLElement).closest<HTMLElement>("[data-key]");
+        let id: powerbi.visuals.ISelectionId | Record<string, never> = {};
+        const b = k ? this.buckets.find(x => x.key === k.getAttribute("data-key")) : undefined;
+        if (b && b.rows.length) { id = this.host.createSelectionIdBuilder().withTable(this.table, b.rows[0]).createSelectionId(); }
+        this.selection.showContextMenu(id as powerbi.visuals.ISelectionId, { x: e.clientX, y: e.clientY });
+    }
+
+    private onKey(e: KeyboardEvent): void {
+        const t = e.target as HTMLElement;
+        if (e.key === "Escape" && this.selected.size) { this.clearSelection(); this.render(); return; }
+        if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && t.classList?.contains("hit")) {
+            const hits = Array.from(t.parentElement!.querySelectorAll<SVGElement>("rect.hit")), i = hits.indexOf(t as unknown as SVGElement);
+            const n = hits[clamp(i + (e.key === "ArrowRight" ? 1 : -1), 0, hits.length - 1)];
+            n.setAttribute("tabindex", "0"); n.focus(); e.preventDefault(); return;
+        }
+        if ((e.key === "Enter" || e.key === " ") && t.tagName !== "BUTTON" && t.tagName !== "INPUT" && t.tagName !== "SELECT" && (t.hasAttribute("data-act") || t.hasAttribute("data-key"))) {
+            e.preventDefault(); t.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey }));
         }
     }
 
@@ -657,7 +727,7 @@ export class Visual implements IVisual {
         this.render();
     }
 
-    private clearSelection(): void { this.selectedKey = null; this.selection.clear(); }
+    private clearSelection(): void { this.selected.clear(); this.selection.clear(); }
 
     private onMove(e: MouseEvent): void {
         const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tip]");

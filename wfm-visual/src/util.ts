@@ -20,3 +20,9 @@ export function setHtml(el: HTMLElement, html: string): void {
     const nodes = Array.from(doc.body.childNodes).map(n => document.importNode(n, true));
     el.replaceChildren(...nodes);
 }
+
+let palFn: ((key: string) => string) | null = null;
+export const setPalette = (f: ((key: string) => string) | null) => { palFn = f; };
+/** Series colour: the host's colour palette when available (themes / high contrast), else our own. */
+export const paletteColor = (key: string, i: number): string => { try { const c = palFn ? palFn(key) : ""; if (c) { return c; } } catch { /* fall through */ } return PALETTE[i % PALETTE.length]; };
+export const attr = (s: string) => esc(s.replace(/\|/g, ", "));

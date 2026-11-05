@@ -63,7 +63,7 @@ export function pageNeeds(page: string, b: Record<string, boolean>): string[] {
     return (need[page] || []).filter(r => !b[r]).map(r => ROLE_LABEL[r]);
 }
 
-export function configIssues(settings: Settings, drivers: Driver[], rows: Row[], bound: Record<string, boolean>, minT: number, maxT: number, problems: string[], viewMode: number): Issue[] {
+export function configIssues(settings: Settings, drivers: Driver[], rows: Row[], bound: Record<string, boolean>, minT: number, maxT: number, problems: string[], viewMode: number, writeBack = false): Issue[] {
     const out: Issue[] = [];
     const add = (level: Level, code: string, title: string, detail: string, fix?: string) => out.push({ level, code, title, detail, fix });
     problems.forEach(p => add("warn", "STORE", "Saved settings had problems", p, "Review the Settings page; invalid values were replaced by defaults."));
@@ -84,7 +84,7 @@ export function configIssues(settings: Settings, drivers: Driver[], rows: Row[],
         }
     } }
     const wb = settings.writeBack;
-    if (wb.enabled) { const m = checkUrl(wb.url); if (m) { add("warn", "WB_URL", "Write-back endpoint", m, "Fix the URL on the Settings page."); } }
+    if (writeBack && wb.enabled) { const m = checkUrl(wb.url); if (m) { add("warn", "WB_URL", "Write-back endpoint", m, "Fix the URL on the Settings page."); } }
     if (viewMode === 0) { add("info", "READ_ONLY", "Read-only view", "Changes to settings and drivers can't be saved to the report in reading view.", "Open the report in edit mode (or Desktop) to keep changes."); }
     return out;
 }
