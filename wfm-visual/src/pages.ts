@@ -1,4 +1,5 @@
 import { DimStat, CoverCell } from "./data";
+import { Issue, checkUrl } from "./validate";
 import { Driver, DRIVER_TYPES, DRIVER_COLORS, Settings, slTargetFor } from "./store";
 import { esc, fmtN, fmt1, pct, spct, initials, safeImg, clamp, PALETTE, toLocalInput, MONTHS } from "./util";
 
@@ -123,7 +124,7 @@ function driverTimeline(ds: Driver[]): string {
 }
 
 // ------------------------------------------------------------------ Settings
-export interface SettingsCtx { settings: Settings; skills: string[]; teams: string[]; levels: string[]; status: string; hasStore: boolean; }
+export interface SettingsCtx { settings: Settings; skills: string[]; teams: string[]; levels: string[]; status: string; hasStore: boolean; issues: Issue[]; summary: string[]; }
 export function settingsHtml(c: SettingsCtx): string {
     const S = c.settings;
     const num = (f: string, v: number | null, w = 90, ph = "") => `<input type="number" data-s="root" data-f="${f}" value="${v ?? ""}" placeholder="${ph}" style="width:${w}px">`;
@@ -133,6 +134,7 @@ export function settingsHtml(c: SettingsCtx): string {
     const levels = c.levels.map((n, i) => `<tr><td>${esc(n)}</td><td><input data-s="level" data-n="${esc(n)}" data-f="label" value="${esc(S.levels[n]?.label || "")}" placeholder="${esc(n)}" style="width:140px"></td><td><input type="color" data-s="level" data-n="${esc(n)}" data-f="color" value="${esc(S.levels[n]?.color || PALETTE[(i + 3) % PALETTE.length])}"></td></tr>`).join("");
     const wb = S.writeBack;
     return `<div class="stack">
+      ${c.status.startsWith("⚠") ? `<div class="card warn">${esc(c.status)}</div>` : ""}
       ${c.hasStore ? "" : `<div class="card warn">Settings are stored in the report file. Changes made in a read-only view may not be kept — open the report in edit mode (or Desktop) to save.</div>`}
       <div class="two"><div class="card"><h3>Targets</h3><div class="form">
         <label>Service level target %${num("slTarget", S.slTarget)}</label>
@@ -146,12 +148,18 @@ export function settingsHtml(c: SettingsCtx): string {
         <label class="wide"><span><input type="checkbox" data-s="root" data-f="applyDrivers" ${S.applyDrivers ? "checked" : ""}> Apply drivers to forecast &amp; required FTE</span></label></div></div>
       <div class="card"><h3>Write-back</h3><div class="form">
         <label class="wide"><span><input type="checkbox" data-s="wb" data-f="enabled" ${wb.enabled ? "checked" : ""}> Enable write-back to my endpoint</span></label>
-        <label class="wide">Endpoint URL (https)<input data-s="wb" data-f="url" value="${esc(wb.url)}" placeholder="https://prod-00.westeurope.logic.azure.com/workflows/…"></label>
+        <label class="wide">Endpoint URL (https)<input data-s="wb" data-f="url" value="${esc(wb.url)}" placeholder="https://prod-00.westeurope.logic.azure.com/workflows/…">${wb.url && checkUrl(wb.url) ? `<span class="fld-err">${esc(checkUrl(wb.url)!)}</span>` : ""}</label>
         <label class="wide"><span><input type="checkbox" data-s="wb" data-f="autoSend" ${wb.autoSend ? "checked" : ""}> Send automatically whenever I save a driver or setting</span></label>
         <div class="btns wide"><button class="btn" data-act="wb-send" data-kind="settings">Send settings</button><button class="btn" data-act="wb-send" data-kind="drivers">Send drivers</button><button class="btn" data-act="wb-send" data-kind="forecast">Send adjusted forecast</button><button class="btn" data-act="wb-load">Load from endpoint</button></div>
         <p class="hint wide">${esc(c.status) || "Settings and drivers are always saved inside the report. The endpoint is optional and lets you also store them in your own system."}</p></div></div></div>
       <div class="two"><div class="card"><h3>Skills</h3><div class="tbl"><table><thead><tr><th>Skill</th><th>Color</th><th>SL target %</th><th>Priority</th><th>Hide</th></tr></thead><tbody>${skills || `<tr><td colspan="5" class="empty">No skills in data</td></tr>`}</tbody></table></div></div>
       <div class="card"><h3>Teams</h3><div class="tbl"><table><thead><tr><th>Team</th><th>SL target %</th></tr></thead><tbody>${teams || `<tr><td colspan="2" class="empty">No teams in data</td></tr>`}</tbody></table></div>
       <h3 style="margin-top:12px">Levels</h3><div class="tbl"><table><thead><tr><th>Level</th><th>Display name</th><th>Color</th></tr></thead><tbody>${levels || `<tr><td colspan="3" class="empty">No levels in data</td></tr>`}</tbody></table></div></div></div>
+      <div class="card"><h3>Data health<span class="lg">${c.issues.length ? `${c.issues.length} item(s)` : "all good"}</span></h3>${c.issues.length ? issuesHtml(c.issues) : `<p class="hint">No problems detected.</p>`}<ul class="sum">${c.summary.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>
       <div class="btns"><button class="btn dng" data-act="reset">Reset all settings</button></div></div>`;
+}
+
+export function issuesHtml(is: Issue[]): string {
+    const ic = { error: "⛔", warn: "⚠️", info: "ℹ️" };
+    return `<ul class="iss">${is.map(i => `<li class="${i.level}"><span class="ico">${ic[i.level]}</span><div><b>${esc(i.title)}</b> — ${esc(i.detail)}${i.fix ? `<div class="fix">How to fix: ${esc(i.fix)}</div>` : ""}</div></li>`).join("")}</ul>`;
 }

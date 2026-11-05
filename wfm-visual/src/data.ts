@@ -43,6 +43,13 @@ export interface AgentStat { name: string; avatar: string; adherence: number | n
 const ROLE_ORDER = ["interval", "skill", "team", "level", "agent", "avatarUrl", "forecastVolume", "actualVolume", "forecastAht",
     "actualAht", "requiredFte", "scheduledFte", "serviceLevel", "adherence"] as const;
 
+export interface ParseStats {
+    totalRows: number; used: number; badInterval: number; dateOnly: boolean;
+    negVol: number; badAht: number; negFte: number; slClamped: number; adClamped: number;
+    agentWithPlan: number; duplicates: number; boundColumns: string[]; minT: number; maxT: number; noActuals: boolean;
+}
+const emptyStats = (): ParseStats => ({ totalRows: 0, used: 0, badInterval: 0, dateOnly: false, negVol: 0, badAht: 0, negFte: 0, slClamped: 0, adClamped: 0, agentWithPlan: 0, duplicates: 0, boundColumns: [], minT: 0, maxT: 0, noActuals: false });
+
 const frac = (v: number | null): number | null => (v !== null && v > 1.5 ? v / 100 : v);   // accept 0-1 or 0-100
 const num = (v: unknown): number | null => {
     if (v === null || v === undefined || v === "") { return null; }
@@ -50,33 +57,51 @@ const num = (v: unknown): number | null => {
     return Number.isFinite(n) ? n : null;
 };
 
-export function parseTable(table: powerbi.DataViewTable | undefined): { rows: Row[]; bound: Record<string, boolean> } {
+/** Parses the table and applies fallbacks: unusable values are ignored (null) or clamped, and counted in `stats` so the UI can warn. */
+export function parseTable(table: powerbi.DataViewTable | undefined): { rows: Row[]; bound: Record<string, boolean>; stats: ParseStats } {
     const bound: Record<string, boolean> = {};
     const rows: Row[] = [];
-    if (!table || !table.columns) { return { rows, bound }; }
+    const stats = emptyStats();
+    if (!table || !table.columns) { return { rows, bound, stats }; }
     const col: Record<string, number> = {};
     table.columns.forEach((c, i) => {
         for (const r of ROLE_ORDER) { if (c.roles && c.roles[r] && col[r] === undefined) { col[r] = i; bound[r] = true; } }
     });
-    if (col.interval === undefined) { return { rows, bound }; }
+    stats.boundColumns = Object.keys(bound);
+    stats.totalRows = (table.rows ?? []).length;
+    if (col.interval === undefined) { return { rows, bound, stats }; }
     const get = (r: powerbi.DataViewTableRow, k: string) => (col[k] === undefined ? null : r[col[k]]);
+    const seen = new Set<string>();
+    let allMidnight = true, anyActual = false, minT = Infinity, maxT = -Infinity;
     (table.rows ?? []).forEach((r, idx) => {
         const raw = get(r, "interval");
         const t = raw instanceof Date ? raw : new Date(raw as string | number);
-        if (!raw || isNaN(t.getTime())) { return; }
-        rows.push({
+        if (raw === null || raw === undefined || raw === "" || isNaN(t.getTime())) { stats.badInterval++; return; }
+        const pos = (v: number | null, c: "negVol" | "negFte"): number | null => { if (v !== null && v < 0) { stats[c]++; return null; } return v; };
+        const aht = (v: number | null): number | null => { if (v !== null && v <= 0) { stats.badAht++; return null; } return v; };
+        const rate = (v: number | null, c: "slClamped" | "adClamped"): number | null => { const f = frac(v); if (f !== null && (f > 1 || f < 0)) { stats[c]++; return clampN(f, 0, 1); } return f; };
+        const row: Row = {
             idx, t,
             skill: String(get(r, "skill") ?? ""), team: String(get(r, "team") ?? ""), level: String(get(r, "level") ?? ""),
-            agent: String(get(r, "agent") ?? ""),
-            avatar: String(get(r, "avatarUrl") ?? ""),
-            fv: num(get(r, "forecastVolume")), av: num(get(r, "actualVolume")),
-            fa: num(get(r, "forecastAht")), aa: num(get(r, "actualAht")),
-            rf: num(get(r, "requiredFte")), sf: num(get(r, "scheduledFte")),
-            sl: frac(num(get(r, "serviceLevel"))), ad: frac(num(get(r, "adherence")))
-        });
+            agent: String(get(r, "agent") ?? ""), avatar: String(get(r, "avatarUrl") ?? ""),
+            fv: pos(num(get(r, "forecastVolume")), "negVol"), av: pos(num(get(r, "actualVolume")), "negVol"),
+            fa: aht(num(get(r, "forecastAht"))), aa: aht(num(get(r, "actualAht"))),
+            rf: pos(num(get(r, "requiredFte")), "negFte"), sf: pos(num(get(r, "scheduledFte")), "negFte"),
+            sl: rate(num(get(r, "serviceLevel")), "slClamped"), ad: rate(num(get(r, "adherence")), "adClamped")
+        };
+        if (t.getHours() !== 0 || t.getMinutes() !== 0 || t.getSeconds() !== 0) { allMidnight = false; }
+        if (row.av !== null) { anyActual = true; }
+        if (row.agent && (row.fv !== null || row.rf !== null)) { stats.agentWithPlan++; }
+        const k = `${t.getTime()}|${row.skill}|${row.team}|${row.agent}`;
+        if (seen.has(k)) { stats.duplicates++; } else { seen.add(k); }
+        const tt = t.getTime(); if (tt < minT) { minT = tt; } if (tt > maxT) { maxT = tt; }
+        rows.push(row);
     });
-    return { rows, bound };
+    stats.used = rows.length; stats.dateOnly = rows.length > 0 && allMidnight; stats.noActuals = rows.length > 0 && !anyActual;
+    stats.minT = rows.length ? minT : 0; stats.maxT = rows.length ? maxT : 0;
+    return { rows, bound, stats };
 }
+const clampN = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
 // ---------- date helpers (local time, as supplied by the model) ----------
 export const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());

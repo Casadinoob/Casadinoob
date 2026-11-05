@@ -182,7 +182,7 @@
             }
           ],
           "dataReductionAlgorithm": {
-            "top": {
+            "window": {
               "count": 30000
             }
           }
@@ -354,6 +354,11 @@
           }
         },
         "showRoster": {
+          "type": {
+            "bool": true
+          }
+        },
+        "showWarnings": {
           "type": {
             "bool": true
           }

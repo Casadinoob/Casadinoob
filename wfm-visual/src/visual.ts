@@ -3,13 +3,14 @@ import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { VisualSettings } from "./settings";
 import {
-    Bucket, Row, ViewMode, parseTable, collapse, bucketize, hourKey, nativeKey, dayKey, weekKey, kpis, byDim, coverage, levelMix, heatmap,
+    Bucket, Row, ViewMode, ParseStats, parseTable, collapse, bucketize, hourKey, nativeKey, dayKey, weekKey, kpis, byDim, coverage, levelMix, heatmap,
     dayStart, addDays, dayLabel, dowName, intervalMinutes, Kpis, HeatCell, DimStat
 } from "./data";
 import {
-    Store, Driver, parseStore, applyDrivers, driverApplies, slTargetFor, defaultSettings, sendWriteBack, loadWriteBack, DRIVER_COLORS
+    Store, Driver, parseStoreChecked, parseStore, applyDrivers, driverApplies, slTargetFor, defaultSettings, sendWriteBack, loadWriteBack, DRIVER_COLORS
 } from "./store";
-import { skillsHtml, teamsHtml, driversHtml, settingsHtml, skillColor } from "./pages";
+import { skillsHtml, teamsHtml, driversHtml, settingsHtml, skillColor, issuesHtml } from "./pages";
+import { Issue, dataIssues, configIssues, pageNeeds, worst, ROLE_LABEL } from "./validate";
 import { esc, safeImg, fmtN, fmt1, pct, spct, initials, clamp, fmtDate, setHtml, PALETTE, toLocalInput, fromLocalInput } from "./util";
 
 import IVisual = powerbi.extensibility.visual.IVisual;
@@ -62,7 +63,13 @@ export class Visual implements IVisual {
     private hasStore = false;
     private editing: Driver | null = null;
     private status = "";
-    private rowsAdjAll: Row[] = [];
+    private issues: Issue[] = [];
+    private stats: ParseStats | null = null;
+    private storeProblems: string[] = [];
+    private fetches = 0;
+    private truncated = false;
+    private showIssues = false;
+    private fatal = "";
 
     constructor(options?: VisualConstructorOptions) {
         if (!options) { throw new Error("VisualConstructorOptions required"); }
@@ -79,7 +86,10 @@ export class Visual implements IVisual {
         this.root.addEventListener("mouseleave", () => this.tooltip.hide({ immediately: true, isTouchEvent: false }));
         this.root.addEventListener("error", e => {
             const t = e.target as HTMLElement;
-            if (t && t.tagName === "IMG") { const p = t.parentElement; if (p) { p.textContent = t.getAttribute("data-init") || "?"; } }
+            if (t && t.tagName === "IMG") {
+                if (t.classList.contains("logo")) { t.remove(); return; }   // broken logo URL: just hide it
+                const p = t.parentElement; if (p) { p.textContent = t.getAttribute("data-init") || "?"; }
+            }
         }, true);
     }
 
@@ -93,12 +103,18 @@ export class Visual implements IVisual {
             const st = dv?.metadata?.objects?.store as { settingsJson?: string; driversJson?: string } | undefined;
             const sig = `${st?.settingsJson ?? ""}|${st?.driversJson ?? ""}`;
             this.hasStore = !!st;
-            if (sig !== this.sig) { this.sig = sig; this.store = parseStore(st?.settingsJson, st?.driversJson); }
+            if (sig !== this.sig) { this.sig = sig; const pc = parseStoreChecked(st?.settingsJson, st?.driversJson); this.store = pc.store; this.storeProblems = pc.problems; }
 
             this.table = dv && dv.table;
             const parsed = parseTable(this.table);
             const key = `${parsed.rows.length}|${parsed.rows[0]?.t.getTime()}|${parsed.rows[parsed.rows.length - 1]?.t.getTime()}`;
-            this.rows = parsed.rows; this.bound = parsed.bound;
+            this.rows = parsed.rows; this.bound = parsed.bound; this.stats = parsed.stats;
+            // Power BI loads data in 30k-row segments: keep fetching (bounded) so totals are complete
+            if (options.operationKind === 0) { this.fetches = 0; }
+            const more = !!dv?.metadata?.segment;
+            const fetching = more && this.fetches < 25;
+            if (fetching) { this.fetches++; this.host.fetchMoreData(true); }
+            this.truncated = more && !fetching;
             if (this.rows.length) {
                 let a = Infinity, b = -Infinity;
                 for (const r of this.rows) { const t = r.t.getTime(); if (t < a) { a = t; } if (t > b) { b = t; } }
@@ -106,6 +122,8 @@ export class Visual implements IVisual {
             }
             const dv0 = this.settings.general.defaultView.value.value as ViewMode;
             if (this.view === null || this.lastDefaultView !== dv0) { this.view = dv0; this.lastDefaultView = dv0; }
+            if (parsed.stats.dateOnly && this.view === "intraday") { this.view = "daily"; }   // fallback: no time-of-day in the data
+            this.issues = dataIssues({ stats: parsed.stats, bound: parsed.bound, truncated: this.truncated, rowCap: parsed.rows.length });
             if (key !== this.dataKey || !this.anchor) { this.dataKey = key; this.anchor = this.anchor ?? this.maxDay; }
             this.anchor = new Date(clamp(this.anchor.getTime(), this.minDay.getTime(), this.maxDay.getTime()));
             if (!this.selection.getSelectionIds().length) { this.selectedKey = null; }
@@ -172,6 +190,21 @@ export class Visual implements IVisual {
     private distinct(f: (r: Row) => string): string[] { return Array.from(new Set(this.rows.map(f).filter(Boolean))).sort(); }
 
     private render(): void {
+        try { this.renderCore(); this.fatal = ""; } catch (e) {
+            this.fatal = String(e);
+            setHtml(this.root, `<div class="empty"><strong>Something went wrong while drawing this visual.</strong><br><br><code>${esc(this.fatal)}</code><br><br><button class="btn pri" data-act="recover">Reset view</button><br><br><span class="hint">If this keeps happening, check the Data health notes in Settings → or re-bind the fields.</span></div>`);
+        }
+    }
+
+    private bannerHtml(is: Issue[]): string {
+        if (!this.settings.sections.showWarnings.value || !is.length) { return ""; }
+        const w = worst(is)!;
+        const open = this.showIssues || w === "error";
+        const cnt = (["error", "warn", "info"] as const).map(l => ({ l, n: is.filter(i => i.level === l).length })).filter(x => x.n).map(x => `${x.n} ${x.l === "warn" ? "warning" : x.l}${x.n > 1 ? "s" : ""}`).join(" · ");
+        return `<div class="hb ${w}"><button data-act="issues">${w === "error" ? "⛔" : w === "warn" ? "⚠️" : "ℹ️"} Data health: ${cnt} <span class="chev">${open ? "▴" : "▾"}</span></button>${open ? issuesHtml(is) : ""}</div>`;
+    }
+
+    private renderCore(): void {
         const g = this.settings.general;
         const col = this.colors();
         const dark = g.theme.value.value === "dark";
@@ -191,16 +224,32 @@ export class Visual implements IVisual {
         let h = `<div class="hd">${logo ? `<img class="logo" src="${esc(logo)}" alt="">` : ""}<div class="ttl">${esc(g.title.value)}</div>`;
         h += `<nav class="pages">${PAGES.map(([p, l]) => `<button data-act="page" data-p="${p}" class="${p === this.page ? "on" : ""}">${l}</button>`).join("")}</nav><div class="grow"></div>`;
         if (showView && this.rows.length) {
-            h += `<div class="seg">${(["intraday", "daily", "weekly"] as ViewMode[]).map(v => `<button data-act="view" data-v="${v}" class="${v === view ? "on" : ""}">${v[0].toUpperCase() + v.slice(1)}</button>`).join("")}</div>`;
+            h += `<div class="seg">${(["intraday", "daily", "weekly"] as ViewMode[]).map(v => (v === "intraday" && this.stats?.dateOnly) ? `<button class="dis" title="Needs a time of day in the Interval field">Intraday</button>` : `<button data-act="view" data-v="${v}" class="${v === view ? "on" : ""}">${v[0].toUpperCase() + v.slice(1)}</button>`).join("")}</div>`;
             h += `<div class="nav"><button data-act="prev" title="Previous">‹</button><span class="rng">${esc(range)}</span><button data-act="next" title="Next">›</button><button data-act="latest" title="Jump to latest" style="width:auto;padding:0 8px">Latest</button></div>`;
         }
-        h += `</div><div class="body" id="pg"></div>`;
+        h += `</div><div class="body"><div id="hb"></div><div id="pg" class="stack"></div></div>`;
         setHtml(this.root, h);
         const body = this.root.querySelector<HTMLElement>("#pg")!;
-
-        if (!this.rows.length && this.page !== "settings" && this.page !== "drivers") {
-            setHtml(body, `<div class="empty"><strong>${esc(g.title.value)}</strong><br><br>Add an <b>Interval (date/time)</b> field plus Forecast / Actual volume, AHT, FTE and Service level measures.</div>`);
-            return;
+        const hbEl = this.root.querySelector<HTMLElement>("#hb")!;
+        const dataPage = this.page === "planning" || this.page === "skills" || this.page === "teams";
+        const cfg = (this.page === "drivers" || this.page === "settings")
+            ? configIssues(this.store.settings, this.store.drivers, this.rows, this.bound, this.stats?.minT ?? 0, this.stats?.maxT ?? 0, this.storeProblems, this.viewMode) : [];
+        const allIssues = [...this.issues, ...cfg];
+        setHtml(hbEl, this.bannerHtml(allIssues));
+        const msg = (title: string, text: string, btns = "") => setHtml(body, `<div class="card"><h3>${esc(title)}</h3><p>${text}</p><div class="btns">${btns}</div></div>`);
+        if (this.viewport.width < 300 || this.viewport.height < 180) { msg("Visual is too small", "Make this visual larger to see the dashboard."); return; }
+        if (dataPage) {
+            if (!this.rows.length) {
+                const need = ["interval", "forecastVolume", "actualVolume", "requiredFte", "scheduledFte"].map(r => `<li>${esc(ROLE_LABEL[r])}</li>`).join("");
+                msg("Nothing to show yet", `Fill the field wells to get started. At minimum bind:<ul>${need}</ul>Skill, Team, Level, Agent and Avatar fields unlock the other pages.`);
+                return;
+            }
+            const miss = pageNeeds(this.page, this.bound);
+            if (miss.length) { msg("This page needs more fields", `Add <b>${esc(miss.join(" and "))}</b> to the field wells to use this page. Until then, everything on the Planning page still works.`, `<button class="btn pri" data-act="page" data-p="planning">Back to Planning</button>`); return; }
+            if (!this.rows.some(r => r.t >= win.from && r.t < win.to)) {
+                msg("No data in this period", `There are no intervals in <b>${esc(range)}</b>. Your data covers ${esc(fmtDate(this.minDay))} – ${esc(fmtDate(this.maxDay))}.`, `<button class="btn pri" data-act="latest">Jump to latest data</button><button class="btn" data-act="view" data-v="${this.stats?.dateOnly ? "daily" : "weekly"}">Zoom out</button>`);
+                return;
+            }
         }
         if (this.page === "planning") { this.renderPlanning(body, win, ws); }
         else if (this.page === "skills") { this.renderSkills(body, win, range); }
@@ -336,8 +385,19 @@ export class Visual implements IVisual {
         setHtml(body, driversHtml({ drivers: this.store.drivers, editing: this.editing, skills: this.distinct(r => r.skill), settings: this.store.settings, status: this.status, impact }));
     }
 
+    private summaryLines(): string[] {
+        const st = this.stats; if (!st) { return []; }
+        const iv = collapse(this.rows);
+        return [
+            `Rows used: ${st.used.toLocaleString()} of ${st.totalRows.toLocaleString()}`,
+            st.used ? `Data range: ${fmtDate(this.minDay)} – ${fmtDate(this.maxDay)} · interval ≈ ${intervalMinutes(iv)} min` : "No usable data",
+            `Fields bound: ${st.boundColumns.map(r => ROLE_LABEL[r] || r).join(", ") || "none"}`,
+            `Skills: ${this.distinct(r => r.skill).length} · Teams: ${this.distinct(r => r.team).length} · Levels: ${this.distinct(r => r.level).length} · Agents: ${this.distinct(r => r.agent).length}`
+        ];
+    }
+
     private renderSettings(body: HTMLElement): void {
-        setHtml(body, settingsHtml({ settings: this.store.settings, skills: this.distinct(r => r.skill), teams: this.distinct(r => r.team), levels: this.distinct(r => r.level), status: this.status, hasStore: !(this.viewMode === 0 && !this.hasStore) }));
+        setHtml(body, settingsHtml({ settings: this.store.settings, skills: this.distinct(r => r.skill), teams: this.distinct(r => r.team), levels: this.distinct(r => r.level), status: this.status, hasStore: !(this.viewMode === 0 && !this.hasStore), issues: [...this.issues, ...configIssues(this.store.settings, this.store.drivers, this.rows, this.bound, this.stats?.minT ?? 0, this.stats?.maxT ?? 0, this.storeProblems, this.viewMode)], summary: this.summaryLines() }));
     }
 
     // ---------------------------------------------------------------- html parts (planning)
@@ -519,6 +579,8 @@ export class Visual implements IVisual {
         const q = (id: string) => this.root.querySelector<HTMLInputElement>("#" + id)?.value ?? "";
         const step = this.view === "intraday" ? 1 : this.view === "daily" ? 7 : 28;
         switch (a) {
+            case "issues": this.showIssues = !this.showIssues; break;
+            case "recover": this.page = "planning"; this.fSkill = null; this.teamFilter = null; this.editing = null; this.clearSelection(); this.anchor = this.maxDay; this.view = this.settings.general.defaultView.value.value as ViewMode; break;
             case "page": this.page = el.getAttribute("data-p") as Page; this.status = ""; break;
             case "view": this.view = el.getAttribute("data-v") as ViewMode; this.clearSelection(); break;
             case "prev": this.anchor = addDays(this.anchor!, -step); this.clearSelection(); break;
@@ -539,7 +601,12 @@ export class Visual implements IVisual {
             case "drv-save": {
                 if (!this.editing) { break; }
                 const s = fromLocalInput(q("f-start")), en = fromLocalInput(q("f-end"));
-                if (!q("f-name").trim() || !s || !en || en <= s) { this.status = "Enter a name and a valid period (end after start)."; break; }
+                if (!q("f-name").trim()) { this.status = "⚠ Enter a name for the driver."; break; }
+                if (!s || !en) { this.status = "⚠ Start and end must be valid dates."; break; }
+                if (en <= s) { this.status = "⚠ The end must be after the start."; break; }
+                const vp = Number(q("f-vol") || 0), ap = Number(q("f-aht") || 0);
+                if (!Number.isFinite(vp) || vp < -100 || vp > 1000) { this.status = "⚠ Volume impact must be between -100% and 1000%."; break; }
+                if (!Number.isFinite(ap) || ap < -90 || ap > 500) { this.status = "⚠ AHT impact must be between -90% and 500%."; break; }
                 const d: Driver = {
                     id: this.editing.id, name: q("f-name").trim(), type: q("f-type") as Driver["type"], start: toLocalInput(s), end: toLocalInput(en),
                     volPct: Number(q("f-vol")) || 0, ahtPct: Number(q("f-aht")) || 0, status: q("f-status") as Driver["status"], note: q("f-note"),
@@ -575,6 +642,14 @@ export class Visual implements IVisual {
         const f = el.getAttribute("data-f")!, n = el.getAttribute("data-n") || "";
         const S = this.store.settings as any;
         const val: any = el.type === "checkbox" ? el.checked : el.type === "number" ? (el.value === "" ? null : Number(el.value)) : el.value;
+        if (el.type === "number" && val !== null) {
+            const hour = f === "heatFrom" || f === "heatTo";
+            const hi = hour ? 23 : f === "slThresholdSec" ? 3600 : 100;
+            if (!Number.isFinite(val) || val < 0 || val > hi) { this.status = `⚠ ${f} must be between 0 and ${hi}; the value was not saved.`; this.render(); return; }
+            if (f === "heatFrom" && val > S.heatTo) { this.status = "⚠ Heatmap “from” hour must not be after “to”."; this.render(); return; }
+            if (f === "heatTo" && val < S.heatFrom) { this.status = "⚠ Heatmap “to” hour must not be before “from”."; this.render(); return; }
+        }
+        this.status = "";
         if (kind === "root") { S[f] = (f === "agentSlTarget" || val !== null) ? val : S[f]; }
         else if (kind === "wb") { S.writeBack[f] = val; }
         else { const bucket = kind === "skill" ? S.skills : kind === "team" ? S.teams : S.levels; bucket[n] = { ...(bucket[n] || {}), [f]: val === "" ? null : val }; }

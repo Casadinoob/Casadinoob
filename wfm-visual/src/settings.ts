@@ -42,7 +42,8 @@ class SectionsCard extends Card {
     showHeatmap = new formattingSettings.ToggleSwitch({ name: "showHeatmap", displayName: "Staffing heatmap", value: true });
     showTable = new formattingSettings.ToggleSwitch({ name: "showTable", displayName: "Interval grid", value: true });
     showRoster = new formattingSettings.ToggleSwitch({ name: "showRoster", displayName: "Agent roster", value: true });
-    slices = [this.showKpis, this.showHeatmap, this.showTable, this.showRoster];
+    showWarnings = new formattingSettings.ToggleSwitch({ name: "showWarnings", displayName: "Data health warnings", value: true });
+    slices = [this.showKpis, this.showHeatmap, this.showTable, this.showRoster, this.showWarnings];
 }
 
 export class VisualSettings extends Model {
